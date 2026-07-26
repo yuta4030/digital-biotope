@@ -1,0 +1,205 @@
+:root {
+  --bg: #0d1013;
+  --panel: #151a1f;
+  --line: #262e36;
+  --text: #d6dee6;
+  --dim: #7c8a97;
+  --accent: #5ec8f2;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.5 "Segoe UI", "Yu Gothic UI", system-ui, sans-serif;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 24px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.readout {
+  display: flex;
+  gap: 20px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+
+.readout b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+main {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 20px;
+}
+
+.stage {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#grid {
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  image-rendering: pixelated;
+}
+
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+button {
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--dim);
+}
+
+button.primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.transport label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--dim);
+}
+
+.transport input[type='range'] {
+  width: 110px;
+}
+
+.transport input[type='number'],
+.transport select {
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+
+.transport input[type='number'] {
+  width: 84px;
+}
+
+.desc {
+  margin: 0;
+  max-width: 720px;
+  color: var(--dim);
+}
+
+.panel {
+  flex: 1;
+  min-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+#graph {
+  display: block;
+  width: 100%;
+  height: 260px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel);
+}
+
+/* 幅があれば設定群を横に並べる。種を増やしても縦に伸び続けない */
+#controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  align-items: start;
+  gap: 8px;
+}
+
+.group {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  padding: 10px 12px;
+}
+
+.group h2 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex: none;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr 118px 46px;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.row span:first-child {
+  color: var(--dim);
+}
+
+.row output {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.row input[type='range'] {
+  width: 100%;
+}
+
+.derived {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+input[type='range'] {
+  accent-color: var(--accent);
+}

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Digital Biotope</title>
+    <link rel="stylesheet" href="/src/ui/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Digital Biotope</h1>
+      <div id="readout" class="readout"></div>
+    </header>
+
+    <main>
+      <section class="stage">
+        <canvas id="grid"></canvas>
+        <div class="transport">
+          <label class="preset">
+            構成
+            <select id="preset"></select>
+          </label>
+          <button id="playPause" class="primary">停止</button>
+          <button id="resetBtn">リセット</button>
+          <label class="speed">
+            速度 <span id="speedLabel">1x</span>
+            <input id="speed" type="range" min="1" max="20" step="1" value="1" />
+          </label>
+          <label class="seed">
+            シード
+            <input id="seed" type="number" value="12345" />
+          </label>
+        </div>
+        <p id="presetDesc" class="desc"></p>
+      </section>
+
+      <aside class="panel">
+        <canvas id="graph"></canvas>
+        <div id="controls"></div>
+      </aside>
+    </main>
+
+    <script type="module" src="/src/ui/main.ts"></script>
+  </body>
+</html>
