@@ -1,0 +1,12 @@
+# 改行はリポジトリ・作業ツリーともに LF で統一する。
+# Git for Windows の既定（core.autocrlf=true）だと作業ツリーが CRLF になり、
+# 環境をまたいで編集したときに混在しうるため、環境設定に依らず固定する。
+* text=auto eol=lf
+
+# 中身がテキストでも改行を触ってはいけないもの
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
