@@ -1,5 +1,8 @@
 import type { WorldConfig } from '../core/types.ts';
 
+/** 世界の幅120と高さ90を割り切る値。パッチはトーラスの継ぎ目でつながる必要がある */
+const PATCH_SCALES = [5, 6, 10, 15, 30];
+
 /**
  * 種定義からスライダーを組み立てる。
  * 種を presets に足せばここは触らずにUIが増える。
@@ -12,6 +15,18 @@ export function buildControls(container: HTMLElement, config: WorldConfig): void
     () => config.grass.regrow, (v) => (config.grass.regrow = v));
   slider(env, '草の最大量', 1, 20, 1, 0,
     () => config.grass.max, (v) => (config.grass.max = v));
+
+  // パッチは回復速度の「分布」を変えるだけで、平均は上の回復速度のまま。
+  // 世界の大きさ(120×90)を割り切る値だけを選べるようにしてある
+  const patch = (config.grass.patch ??= { scale: 10, contrast: 0 });
+  slider(env, 'パッチの強さ', 0, 1, 0.05, 2,
+    () => patch.contrast, (v) => (patch.contrast = v));
+  slider(env, 'パッチの大きさ', 0, PATCH_SCALES.length - 1, 1, 0,
+    () => Math.max(0, PATCH_SCALES.indexOf(patch.scale)),
+    (v) => (patch.scale = PATCH_SCALES[v]),
+    undefined,
+    (v) => String(PATCH_SCALES[v]));
+
   container.appendChild(env);
 
   for (const def of config.species) {
@@ -98,6 +113,8 @@ function slider(
   get: () => number,
   set: (v: number) => void,
   onInput?: () => void,
+  /** 表示だけ差し替える。スライダーの値と見せたい数字が違うとき用 */
+  format?: (v: number) => string,
 ): void {
   const row = document.createElement('div');
   row.className = 'row';
@@ -112,13 +129,15 @@ function slider(
   input.step = String(stepSize);
   input.value = String(get());
 
+  const show = format ?? ((v: number) => v.toFixed(digits));
+
   const out = document.createElement('output');
-  out.textContent = get().toFixed(digits);
+  out.textContent = show(get());
 
   input.addEventListener('input', () => {
     const v = Number(input.value);
     set(v);
-    out.textContent = v.toFixed(digits);
+    out.textContent = show(v);
     onInput?.();
   });
 

@@ -63,13 +63,37 @@ export interface SpeciesDef {
   initialEnergy: number;
 }
 
+/**
+ * 草地の空間的な不均質さ。回復速度をセルごとに変える。
+ *
+ * 重みの平均はちょうど1に正規化されるので、`regrow` が表す
+ * **世界全体の生産量は変わらない**。分布だけが変わる。
+ * 豊穣化（生産量そのものを増やす操作、[06](../../docs/reports/06-enrichment.md)）と
+ * 混ざらないようにするため。
+ */
+export interface GrassPatchConfig {
+  /**
+   * パッチの大きさ（セル）。世界の幅と高さを割り切る値であること。
+   * 小さいほど細かいまだら、大きいほど広い草原と荒野に分かれる。
+   */
+  scale: number;
+  /**
+   * 不均質の強さ (0-1)。0なら一様。
+   * 回復速度は最も痩せたセルで `regrow × (1-contrast)`、
+   * 最も豊かなセルで `regrow × (1+contrast)` になる。1なら痩せた側は完全な不毛地。
+   */
+  contrast: number;
+}
+
 export interface GrassConfig {
   /** セルあたりの草の最大量 */
   max: number;
-  /** 1ステップあたりの回復量 */
+  /** 1ステップあたりの回復量。パッチがある場合は世界の平均値になる */
   regrow: number;
   /** 初期量（max に対する割合 0-1） */
   initialRatio: number;
+  /** 空間的な不均質。省略か contrast=0 なら一様（既定） */
+  patch?: GrassPatchConfig;
 }
 
 export interface WorldConfig {

@@ -12,6 +12,10 @@ export interface Trial {
   species: { name: string; mean: number; min: number; max: number }[];
   /** 崩壊した試行の絶滅ステップ */
   extinctAt: number[];
+  /** セルあたりの草の平均残量 */
+  grassMean: number;
+  /** 1ステップに実際に加わった草の量。上限で捨てたぶんは含まれない */
+  grassProduced: number;
 }
 
 /**
@@ -36,6 +40,8 @@ export function trial(
     survived: rs.filter((r) => r.survived).length,
     total: seeds.length,
     extinctAt: rs.filter((r) => !r.survived).map((r) => r.extinctAt),
+    grassMean: rs.reduce((a, r) => a + r.grassMean, 0) / seeds.length,
+    grassProduced: rs.reduce((a, r) => a + r.grassProduced, 0) / seeds.length,
     species: rs[0].species.map((s, i) => ({
       name: s.name,
       mean: rs.reduce((a, r) => a + r.species[i].mean, 0) / seeds.length,

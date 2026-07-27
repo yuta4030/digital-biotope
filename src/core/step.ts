@@ -19,15 +19,50 @@ export function step(w: World): void {
   w.stepCount++;
 }
 
-/** 草は各セルで一定量ずつ回復し、上限で頭打ちになる */
+/**
+ * 草は各セルで一定量ずつ回復し、上限で頭打ちになる。
+ *
+ * パッチがある場合はセルごとの倍率を掛ける。倍率の平均は1なので名目の生産量は
+ * 変わらないが、豊かなセルほど上限に張り付いて回復ぶんを捨てるため、
+ * **実際に入るエネルギーは一様な場合より少なくなる**。
+ * その差を w.grassAdded に記録しておく。
+ */
 function regrowGrass(w: World): void {
+  w.syncGrassWeight();
+
   const grass = w.grass;
   const max = w.config.grass.max;
   const rate = w.config.grass.regrow;
-  for (let c = 0; c < w.cells; c++) {
-    const g = grass[c] + rate;
-    grass[c] = g > max ? max : g;
+  let added = 0;
+
+  if (!w.grassPatched) {
+    for (let c = 0; c < w.cells; c++) {
+      const before = grass[c];
+      const g = before + rate;
+      if (g > max) {
+        added += max - before;
+        grass[c] = max;
+      } else {
+        added += rate;
+        grass[c] = g;
+      }
+    }
+  } else {
+    const weight = w.grassWeight;
+    for (let c = 0; c < w.cells; c++) {
+      const before = grass[c];
+      const g = before + rate * weight[c];
+      if (g > max) {
+        added += max - before;
+        grass[c] = max;
+      } else {
+        added += g - before;
+        grass[c] = g;
+      }
+    }
   }
+
+  w.grassAdded = added;
 }
 
 /** 端は反対側につながる（トーラス）。壁にすると端に個体が溜まって分布が歪む */

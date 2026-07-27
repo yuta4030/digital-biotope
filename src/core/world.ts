@@ -1,6 +1,11 @@
 import { Rng } from './rng.ts';
 import type { SpeciesDef, WorldConfig, StepStats } from './types.ts';
 
+/** 格子点の間を滑らかにつなぐ。線形補間だと格子線が直線の模様として残る */
+function smoothstep(t: number): number {
+  return t * t * (3 - 2 * t);
+}
+
 /**
  * シミュレーションの状態。
  *
@@ -34,6 +39,23 @@ export class World {
 
   /** 各セルの草の量 */
   readonly grass: Float32Array;
+  /**
+   * 各セルの回復速度の倍率。**平均はちょうど1**なので、
+   * これを掛けても世界全体の生産量は config.grass.regrow のまま変わらない。
+   * パッチ無しなら全要素1で、`grassPatched` が false になり掛け算自体を省く。
+   */
+  readonly grassWeight: Float32Array;
+  grassPatched = false;
+  /** grassWeight を組んだときのパッチ設定。スライダーで変わったら組み直す */
+  private builtScale = -1;
+  private builtContrast = -1;
+  /**
+   * 直前のステップで実際に草に加わった量。
+   * 上限で頭打ちになったぶんは入らないので、名目の生産量（regrow × セル数）とは一致しない。
+   * パッチは豊かなセルを飽和させやすく、実質的な生産量を下げる方向に効く。
+   * その量を測らないと「不均質にした効果」と「痩せた効果」が区別できない。
+   */
+  grassAdded = 0;
 
   // --- エージェント ---
   readonly capacity: number;
@@ -95,6 +117,8 @@ export class World {
 
     this.grass = new Float32Array(this.cells);
     this.grass.fill(config.grass.max * config.grass.initialRatio);
+    this.grassWeight = new Float32Array(this.cells);
+    this.syncGrassWeight();
 
     this.capacity = config.maxAgents;
     this.aSpecies = new Uint8Array(this.capacity);
@@ -111,6 +135,86 @@ export class World {
     this.order = new Int32Array(this.capacity);
 
     this.spawnInitial();
+  }
+
+  /**
+   * パッチ設定が変わっていたら草の回復速度の分布を組み直す。
+   * 毎ステップ頭で呼ぶが、比較2回で済むのでスライダーを動かした時しか働かない。
+   */
+  syncGrassWeight(): void {
+    const p = this.config.grass.patch;
+    const scale = p ? p.scale : 0;
+    const contrast = p ? p.contrast : 0;
+    if (scale === this.builtScale && contrast === this.builtContrast) return;
+    this.builtScale = scale;
+    this.builtContrast = contrast;
+
+    if (scale <= 0 || contrast <= 0) {
+      this.grassWeight.fill(1);
+      this.grassPatched = false;
+      return;
+    }
+    if (this.width % scale !== 0 || this.height % scale !== 0) {
+      throw new Error(
+        `パッチの大きさ ${scale} は世界の幅 ${this.width} と高さ ${this.height} を割り切る必要があります` +
+          '（トーラスの継ぎ目で分布が途切れるため）',
+      );
+    }
+    this.buildPatchField(scale, contrast);
+    this.grassPatched = true;
+  }
+
+  /**
+   * 格子点に乱数を置いて滑らかに補間する（バリューノイズ）。
+   *
+   * 単純にブロックごとの乱数にするとパッチが軸に沿った四角になり、
+   * それ自体が動物の分布を歪めかねない。[03](../../docs/reports/03-vision-and-pursuit.md)
+   * の「走査順バイアスが群れの流れとして観察された」のと同じ失敗を避けるため、
+   * 角を丸めて向きの偏りを消してある。
+   *
+   * 乱数は世界本体とは別のストリームから引く。同じ rng を使うと、
+   * パッチを無効にした場合でも消費数が変わって既存の結果が再現しなくなる。
+   */
+  private buildPatchField(scale: number, contrast: number): void {
+    const { width, height, cells, grassWeight } = this;
+    const gw = width / scale;
+    const gh = height / scale;
+
+    const rng = new Rng((this.config.seed ^ 0x5bf03635) >>> 0);
+    const lattice = new Float64Array(gw * gh);
+    for (let i = 0; i < lattice.length; i++) lattice[i] = rng.next() * 2 - 1;
+
+    // 端は反対側の格子点につなぐ。世界がトーラスなので分布も連続させる
+    for (let y = 0; y < height; y++) {
+      const gy = (y / scale) | 0;
+      const ty = smoothstep((y % scale) / scale);
+      const r0 = gy * gw;
+      const r1 = ((gy + 1) % gh) * gw;
+      for (let x = 0; x < width; x++) {
+        const gx = (x / scale) | 0;
+        const tx = smoothstep((x % scale) / scale);
+        const gx1 = (gx + 1) % gw;
+        const top = lattice[r0 + gx] + (lattice[r0 + gx1] - lattice[r0 + gx]) * tx;
+        const bottom = lattice[r1 + gx] + (lattice[r1 + gx1] - lattice[r1 + gx]) * tx;
+        grassWeight[y * width + x] = top + (bottom - top) * ty;
+      }
+    }
+
+    // 平均を0に寄せてから振幅を contrast に合わせる。
+    // 平均1を保つのが要点で、これを外すと不均質にしたのか痩せさせたのか分からなくなる
+    let mean = 0;
+    for (let c = 0; c < cells; c++) mean += grassWeight[c];
+    mean /= cells;
+
+    let amp = 0;
+    for (let c = 0; c < cells; c++) {
+      const d = Math.abs(grassWeight[c] - mean);
+      if (d > amp) amp = d;
+    }
+    const k = amp > 0 ? contrast / amp : 0;
+    for (let c = 0; c < cells; c++) {
+      grassWeight[c] = 1 + (grassWeight[c] - mean) * k;
+    }
   }
 
   private spawnInitial(): void {
@@ -212,6 +316,20 @@ export class World {
     for (let c = 0; c < this.cells; c++) totalGrass += this.grass[c];
 
     return { step: this.stepCount, population, totalGrass };
+  }
+
+  /** 草の回復速度の分布。レポートで実現値を確かめるため */
+  grassWeightStats(): { min: number; max: number; mean: number } {
+    let min = Infinity;
+    let max = 0;
+    let sum = 0;
+    for (let c = 0; c < this.cells; c++) {
+      const v = this.grassWeight[c];
+      if (v < min) min = v;
+      if (v > max) max = v;
+      sum += v;
+    }
+    return { min, max, mean: sum / this.cells };
   }
 
   /** 全種が生存しているか（絶滅判定） */
