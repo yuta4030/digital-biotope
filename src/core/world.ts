@@ -56,6 +56,20 @@ export class World {
    * その量を測らないと「不均質にした効果」と「痩せた効果」が区別できない。
    */
   grassAdded = 0;
+  /**
+   * 直前のステップで死骸から草へ戻った量。
+   * 回復速度とは別口の流入なので、分けて数えないと豊穣化と区別がつかない。
+   */
+  grassFromCorpses = 0;
+
+  /**
+   * 直前のステップの死亡数。種インデックス別。毎ステップ上書きする。
+   *
+   * 死骸の還元は餓死と寿命死にしか効かないので、その種の死因の内訳を見ないと
+   * 「還元を入れたのに何も起きない」の理由が分からない。
+   */
+  readonly deathsEaten: Int32Array;
+  readonly deathsOther: Int32Array;
 
   // --- エージェント ---
   readonly capacity: number;
@@ -114,6 +128,8 @@ export class World {
 
     this.anyVision = this.defs.some((d) => d.visionRange > 0 && d.speed > 0);
     this.effMetabolism = new Float64Array(n);
+    this.deathsEaten = new Int32Array(n);
+    this.deathsOther = new Int32Array(n);
 
     this.grass = new Float32Array(this.cells);
     this.grass.fill(config.grass.max * config.grass.initialRatio);

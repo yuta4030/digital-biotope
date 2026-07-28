@@ -23,6 +23,12 @@ export interface RunResult {
    * 「不均質にした効果」と「実質的に痩せた効果」を切り分けるのに要る。
    */
   grassProduced: number;
+  /**
+   * 1ステップあたり死骸から草へ戻った量の平均。
+   * 回復速度による生産（grassProduced）とは別口の流入なので、
+   * 合計が世界に入る総エネルギーになる。豊穣化と切り分けるのに要る。
+   */
+  corpseInput: number;
 }
 
 /**
@@ -44,6 +50,7 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
   let grassSum = 0;
   let grassSamples = 0;
   let producedSum = 0;
+  let corpseSum = 0;
   let extinctAt = -1;
 
   const tailFrom = steps - tail;
@@ -71,6 +78,7 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
       samples++;
       // 生産量は step が計算済みなので毎ステップ足しても安い
       producedSum += w.grassAdded;
+      corpseSum += w.grassFromCorpses;
 
       // 草の総量はセル数ぶん舐めるので間引く
       if (s % 50 === 0) {
@@ -87,6 +95,7 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
     extinctAt,
     grassMean: grassSamples > 0 ? grassSum / grassSamples : 0,
     grassProduced: samples > 0 ? producedSum / samples : 0,
+    corpseInput: samples > 0 ? corpseSum / samples : 0,
     species: w.defs.map((def, i) => ({
       id: def.id,
       name: def.name,
@@ -122,6 +131,7 @@ export interface SweepRow {
   species: SpeciesResult[];
   grassMean: number;
   grassProduced: number;
+  corpseInput: number;
 }
 
 /** 全軸の直積を走査する */
@@ -165,6 +175,7 @@ export function runSweep(
       repeats: opts.repeats,
       grassMean: avg(results.map((r) => r.grassMean)),
       grassProduced: avg(results.map((r) => r.grassProduced)),
+      corpseInput: avg(results.map((r) => r.corpseInput)),
       species: Array.from({ length: nSpecies }, (_, i) => ({
         id: results[0].species[i].id,
         name: results[0].species[i].name,
@@ -196,6 +207,7 @@ export function toCsv(rows: SweepRow[]): string {
     'repeats',
     'grass_mean',
     'grass_produced',
+    'corpse_input',
     ...rows[0].species.flatMap((s) => [`${s.name}_mean`, `${s.name}_min`, `${s.name}_max`]),
   ];
 
@@ -208,6 +220,7 @@ export function toCsv(rows: SweepRow[]): string {
         row.repeats,
         row.grassMean.toFixed(1),
         row.grassProduced.toFixed(2),
+        row.corpseInput.toFixed(2),
         ...row.species.flatMap((s) => [s.mean.toFixed(1), s.min, s.max]),
       ].join(','),
     );

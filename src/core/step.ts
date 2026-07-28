@@ -35,9 +35,12 @@ function regrowGrass(w: World): void {
   const rate = w.config.grass.regrow;
   let added = 0;
 
+  // 上限を超えているセルは伸びも縮みもしない。死骸の還元は上限を超えて積めるので、
+  // ここで max に丸めると戻したぶんを取り上げてしまう
   if (!w.grassPatched) {
     for (let c = 0; c < w.cells; c++) {
       const before = grass[c];
+      if (before >= max) continue;
       const g = before + rate;
       if (g > max) {
         added += max - before;
@@ -51,6 +54,7 @@ function regrowGrass(w: World): void {
     const weight = w.grassWeight;
     for (let c = 0; c < w.cells; c++) {
       const before = grass[c];
+      if (before >= max) continue;
       const g = before + rate * weight[c];
       if (g > max) {
         added += max - before;
@@ -229,6 +233,9 @@ function moveOne(w: World, i: number): void {
  * 添字の若い個体が always 先に餌を取る偏りが出るため。
  */
 function feed(w: World): void {
+  w.deathsEaten.fill(0);
+  w.deathsOther.fill(0);
+
   const nSpecies = w.defs.length;
   const order = w.order;
   const count = w.count;
@@ -255,6 +262,7 @@ function feed(w: World): void {
         // captureRate が 1 のときは乱数を消費しない（既存の構成の結果を変えないため）
         if (def.captureRate >= 1 || w.rng.chance(def.captureRate)) {
           w.aAlive[j] = 0;
+          w.deathsEaten[w.aSpecies[j]]++;
           w.aEnergy[i] += def.gainFromPrey;
           ate = true;
         }
@@ -274,11 +282,24 @@ function feed(w: World): void {
   }
 }
 
+/**
+ * 代謝でエネルギーを減らし、尽きた個体と寿命の来た個体を殺す。
+ *
+ * 死骸の還元が有効なら、ここで死んだ個体の体を自分のいたセルの草に戻す。
+ * この手番に来ている時点で捕食は生き延びているので、**食べられて死んだ個体は
+ * 自動的に対象外**になる。体が捕食者に移っているぶんを二重に数えないため。
+ *
+ * 戻した草は上限を超えてよい。死骸はその場に固まって落ちるものなので、
+ * 上限で切ると大量死の直後ほど戻るぶんが消えることになり、
+ * 「還元を入れた効果」がいちばん効くはずの場面で消えてしまう。
+ */
 function metabolize(w: World): void {
   // 行動コストを含めた実効値を種ごとに1回だけ求める。
   // スライダーで即時に変わるので毎ステップ引き直すが、種数ぶんなので安い
   const cost = w.effMetabolism;
   for (let s = 0; s < w.defs.length; s++) cost[s] = w.effectiveMetabolism(s);
+
+  let returned = 0;
 
   for (let i = 0; i < w.count; i++) {
     if (w.aAlive[i] === 0) continue;
@@ -288,13 +309,27 @@ function metabolize(w: World): void {
     w.aEnergy[i] -= cost[si];
     if (w.aEnergy[i] <= 0) {
       w.aAlive[i] = 0;
+      w.deathsOther[si]++;
+      if (def.corpseGrass > 0) {
+        w.grass[w.aY[i] * w.width + w.aX[i]] += def.corpseGrass;
+        returned += def.corpseGrass;
+      }
       continue;
     }
 
     const age = w.aAge[i] + 1;
     w.aAge[i] = age;
-    if (def.maxAge > 0 && age >= def.maxAge) w.aAlive[i] = 0;
+    if (def.maxAge > 0 && age >= def.maxAge) {
+      w.aAlive[i] = 0;
+      w.deathsOther[si]++;
+      if (def.corpseGrass > 0) {
+        w.grass[w.aY[i] * w.width + w.aX[i]] += def.corpseGrass;
+        returned += def.corpseGrass;
+      }
+    }
   }
+
+  w.grassFromCorpses = returned;
 }
 
 function reproduce(w: World): void {
