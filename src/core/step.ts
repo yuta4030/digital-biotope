@@ -9,6 +9,7 @@ import { World } from './world.ts';
  * 移動してからインデックスを作るので、捕食判定は「移動後に同じセルにいるか」になる。
  */
 export function step(w: World): void {
+  releaseDetritus(w);
   regrowGrass(w);
   moveAgents(w);
   w.buildSpatialIndex();
@@ -67,6 +68,49 @@ function regrowGrass(w: World): void {
   }
 
   w.grassAdded = added;
+}
+
+/**
+ * 死骸の在庫を放出率のぶんだけ草に変える。
+ *
+ * 放出率1なら在庫は毎ステップ空になり、代謝の手番で草に直接足したのと
+ * 同じ順序になる（草に入る → 次の回復 の並びが変わらない）。
+ * [08](../../docs/reports/08-corpse-recycling.md) の結果はそのまま再現する。
+ *
+ * 率を下げると在庫が溜まり、流入が均される。**総入力は変えずに
+ * 変動係数だけを下げられる**のがこの仕組みの狙い。
+ */
+function releaseDetritus(w: World): void {
+  if (!w.anyCorpse) {
+    w.grassFromCorpses = 0;
+    return;
+  }
+
+  const rate = w.config.grass.detritusRelease ?? 1;
+  const det = w.detritus;
+  const grass = w.grass;
+  let released = 0;
+
+  if (rate >= 1) {
+    for (let c = 0; c < w.cells; c++) {
+      const d = det[c];
+      if (d === 0) continue;
+      grass[c] += d;
+      det[c] = 0;
+      released += d;
+    }
+  } else {
+    for (let c = 0; c < w.cells; c++) {
+      const d = det[c];
+      if (d === 0) continue;
+      const out = d * rate;
+      grass[c] += out;
+      det[c] = d - out;
+      released += out;
+    }
+  }
+
+  w.grassFromCorpses = released;
 }
 
 /** 端は反対側につながる（トーラス）。壁にすると端に個体が溜まって分布が歪む */
@@ -299,8 +343,6 @@ function metabolize(w: World): void {
   const cost = w.effMetabolism;
   for (let s = 0; s < w.defs.length; s++) cost[s] = w.effectiveMetabolism(s);
 
-  let returned = 0;
-
   for (let i = 0; i < w.count; i++) {
     if (w.aAlive[i] === 0) continue;
     const si = w.aSpecies[i];
@@ -310,10 +352,7 @@ function metabolize(w: World): void {
     if (w.aEnergy[i] <= 0) {
       w.aAlive[i] = 0;
       w.deathsOther[si]++;
-      if (def.corpseGrass > 0) {
-        w.grass[w.aY[i] * w.width + w.aX[i]] += def.corpseGrass;
-        returned += def.corpseGrass;
-      }
+      if (def.corpseGrass > 0) dropCorpse(w, def.corpseGrass, def.corpseSpread, w.aX[i], w.aY[i]);
       continue;
     }
 
@@ -322,14 +361,31 @@ function metabolize(w: World): void {
     if (def.maxAge > 0 && age >= def.maxAge) {
       w.aAlive[i] = 0;
       w.deathsOther[si]++;
-      if (def.corpseGrass > 0) {
-        w.grass[w.aY[i] * w.width + w.aX[i]] += def.corpseGrass;
-        returned += def.corpseGrass;
-      }
+      if (def.corpseGrass > 0) dropCorpse(w, def.corpseGrass, def.corpseSpread, w.aX[i], w.aY[i]);
     }
   }
+}
 
-  w.grassFromCorpses = returned;
+/**
+ * 死骸を在庫に落とす。半径0なら死んだセルに全量、1以上なら周囲へ均等に分ける。
+ *
+ * 半径0だと1セルに採食量(4)の何倍もの山ができる。草食動物は1ステップに
+ * 採食量ぶんしか食べないので、山は少数の個体に長く占有される。
+ * まき散らすとその偏りが消えるので、空間の集中が効いているかを判定できる。
+ */
+function dropCorpse(w: World, amount: number, spread: number, x: number, y: number): void {
+  if (spread <= 0) {
+    w.detritus[y * w.width + x] += amount;
+    return;
+  }
+  const side = 2 * spread + 1;
+  const share = amount / (side * side);
+  for (let oy = -spread; oy <= spread; oy++) {
+    const row = wrap(y + oy, w.height) * w.width;
+    for (let ox = -spread; ox <= spread; ox++) {
+      w.detritus[row + wrap(x + ox, w.width)] += share;
+    }
+  }
 }
 
 function reproduce(w: World): void {

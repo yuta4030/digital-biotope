@@ -34,6 +34,8 @@ export class World {
   readonly predatorBits: Uint32Array;
   /** 視界を持つ種が1つでもあるか。無ければ移動前のインデックス構築を省く */
   readonly anyVision: boolean;
+  /** 死骸を戻す種が1つでもあるか。無ければ在庫の走査を丸ごと省く */
+  readonly anyCorpse: boolean;
   /** 種別の実効代謝。スライダーで随時変わるので毎ステップ引き直す */
   readonly effMetabolism: Float64Array;
 
@@ -61,6 +63,12 @@ export class World {
    * 回復速度とは別口の流入なので、分けて数えないと豊穣化と区別がつかない。
    */
   grassFromCorpses = 0;
+  /**
+   * セルごとの死骸の在庫。死骸はまずここに積まれ、
+   * config.grass.detritusRelease の割合ずつ草へ変わる。
+   * 放出率1なら1ステップで空になるので、在庫を持たないのと同じ挙動になる。
+   */
+  readonly detritus: Float32Array;
 
   /**
    * 直前のステップの死亡数。種インデックス別。毎ステップ上書きする。
@@ -127,6 +135,7 @@ export class World {
     });
 
     this.anyVision = this.defs.some((d) => d.visionRange > 0 && d.speed > 0);
+    this.anyCorpse = this.defs.some((d) => d.corpseGrass > 0);
     this.effMetabolism = new Float64Array(n);
     this.deathsEaten = new Int32Array(n);
     this.deathsOther = new Int32Array(n);
@@ -135,6 +144,7 @@ export class World {
     this.grass.fill(config.grass.max * config.grass.initialRatio);
     this.grassWeight = new Float32Array(this.cells);
     this.syncGrassWeight();
+    this.detritus = new Float32Array(this.cells);
 
     this.capacity = config.maxAgents;
     this.aSpecies = new Uint8Array(this.capacity);
@@ -332,6 +342,13 @@ export class World {
     for (let c = 0; c < this.cells; c++) totalGrass += this.grass[c];
 
     return { step: this.stepCount, population, totalGrass };
+  }
+
+  /** 死骸の在庫の総量。均され方を見るのに要る */
+  totalDetritus(): number {
+    let t = 0;
+    for (let c = 0; c < this.cells; c++) t += this.detritus[c];
+    return t;
   }
 
   /** 草の回復速度の分布。レポートで実現値を確かめるため */

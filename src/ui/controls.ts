@@ -73,8 +73,12 @@ export function buildControls(container: HTMLElement, config: WorldConfig): void
       () => def.speed, (v) => (def.speed = v), refresh);
     slider(g, '視野', 0, 8, 1, 0,
       () => def.visionRange, (v) => (def.visionRange = v), refresh);
-    slider(g, '死骸の還元', 0, 20, 0.5, 1,
+    slider(g, '死骸の還元', 0, 100, 1, 0,
       () => def.corpseGrass, (v) => (def.corpseGrass = v));
+    // 1セルに固まって落ちると、そこだけ採食量の何倍もの山になる。
+    // それが安定性を大きく変える（docs/reports/09）
+    slider(g, '死骸の半径', 0, 5, 1, 0,
+      () => def.corpseSpread, (v) => (def.corpseSpread = v));
     slider(g, '初期個体数 *', 0, 2000, 10, 0,
       () => def.initialCount, (v) => (def.initialCount = v));
 

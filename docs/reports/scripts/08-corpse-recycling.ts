@@ -185,22 +185,74 @@ for (const [label, apply] of cases) {
   console.log(`  ${label.padEnd(18)} ${mean.toFixed(1).padStart(6)} / ${(sd / mean).toFixed(2)}          ${corr(series, pops).toFixed(2)}`);
 }
 
-/** ピアソン相関 */
-function corr(a: number[], b: number[]): number {
-  const n = a.length;
-  const ma = a.reduce((x, y) => x + y, 0) / n;
-  const mb = b.reduce((x, y) => x + y, 0) / n;
+/**
+ * ラグ付き相関。corr(死骸(t), 草食(t+lag))。
+ *
+ * 「死骸が次の暴走の燃料になっている」なら正のラグで正の相関が立つはず、
+ * という確認のために測った。結果は下の表のとおり**ラグとともに符号が反転する**。
+ * 両方の系列が同じ周期で振動しているので、相関は周期を写しているだけで、
+ * 先行しているかどうかの証拠にはならない。
+ */
+function corrAt(a: number[], b: number[], lag: number): number {
+  const n = Math.min(a.length, b.length) - Math.abs(lag);
+  const ai = lag >= 0 ? 0 : -lag;
+  const bi = lag >= 0 ? lag : 0;
+  let ma = 0;
+  let mb = 0;
+  for (let i = 0; i < n; i++) {
+    ma += a[ai + i];
+    mb += b[bi + i];
+  }
+  ma /= n;
+  mb /= n;
   let num = 0;
   let da = 0;
   let db = 0;
   for (let i = 0; i < n; i++) {
-    const x = a[i] - ma;
-    const y = b[i] - mb;
+    const x = a[ai + i] - ma;
+    const y = b[bi + i] - mb;
     num += x * y;
     da += x * x;
     db += y * y;
   }
   return num / Math.sqrt(da * db);
+}
+
+function corr(a: number[], b: number[]): number {
+  return corrAt(a, b, 0);
+}
+
+console.log('\n  ラグ付き相関 corr(死骸流入(t), 草食個体数(t+lag))');
+const LAGS = [-200, -100, -50, 0, 50, 100, 150, 200, 300];
+console.log('  条件              ' + LAGS.map((l) => String(l).padStart(6)).join(''));
+
+for (const [label, apply] of cases) {
+  const acc = new Float64Array(LAGS.length);
+  const seeds = SEEDS8.slice(0, 4);
+  let used = 0;
+  for (const seed of seeds) {
+    const cfg = presetByKey('basic').build();
+    cfg.seed = seed;
+    apply(cfg);
+    const w = new World(cfg);
+    const counts = new Int32Array(w.defs.length);
+    const corpse: number[] = [];
+    const pop: number[] = [];
+    for (let s = 0; s < STEPS; s++) {
+      step(w);
+      if (s < STEPS - TAIL) continue;
+      w.countBySpecies(counts);
+      corpse.push(w.grassFromCorpses);
+      pop.push(counts[0]);
+    }
+    // 崩壊した試行は系列が定数になり相関が定義できない
+    if (pop[pop.length - 1] === 0) continue;
+    LAGS.forEach((l, i) => (acc[i] += corrAt(corpse, pop, l)));
+    used++;
+  }
+  console.log(
+    `  ${label.padEnd(18)}` + Array.from(acc, (v) => (v / used).toFixed(2).padStart(6)).join(''),
+  );
 }
 
 done(t0);

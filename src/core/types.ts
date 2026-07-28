@@ -69,6 +69,15 @@ export interface SpeciesDef {
    * 実際に死骸から入った量は step が別に数えている。
    */
   corpseGrass: number;
+  /**
+   * 死骸をまき散らす半径（セル）。0なら死んだセルに全部落ちる（既定）。
+   * 1以上なら (2r+1)^2 セルへ均等に分ける。
+   *
+   * 死骸は1セルに固まって落ちるので、草食動物が1回に食べられる量（採食量）を
+   * 大きく超えた山になる。時間方向の均し（detritusRelease）と対にして、
+   * **空間方向に均したらどうなるか**を見るための軸。
+   */
+  corpseSpread: number;
 
   /** 初期個体数 */
   initialCount: number;
@@ -107,6 +116,16 @@ export interface GrassConfig {
   initialRatio: number;
   /** 空間的な不均質。省略か contrast=0 なら一様（既定） */
   patch?: GrassPatchConfig;
+  /**
+   * 死骸をいったんセルごとの在庫（デトリタス）に積み、毎ステップこの割合だけ
+   * 草に変える (0-1]。1なら在庫を素通りして即座に草になる＝既定で、
+   * [08](../../docs/reports/08-corpse-recycling.md) と同じ挙動。
+   *
+   * 在庫はローパスフィルタとして働くので、**総入力を変えずに流入のばらつき
+   * だけを下げられる**。08で「効いているのは変動係数」まで絞れたので、
+   * それを直接動かすための操作。
+   */
+  detritusRelease?: number;
 }
 
 export interface WorldConfig {

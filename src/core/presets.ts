@@ -22,6 +22,7 @@ function animal(
     maxAge: 0,
     // 既定では死骸は消える。閉じたループにするのは「還元」を測るときだけ
     corpseGrass: 0,
+    corpseSpread: 0,
     initialCount: 100,
     initialEnergy: 15,
     ...p,
