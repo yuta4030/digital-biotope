@@ -1,6 +1,12 @@
 import { Worker } from 'node:worker_threads';
 import { availableParallelism } from 'node:os';
-import { runOne, type RunResult } from './run.ts';
+import {
+  runOne,
+  runTrace,
+  type RunResult,
+  type TraceOptions,
+  type TraceResult,
+} from './run.ts';
 import type { WorldConfig } from '../core/types.ts';
 
 /**
@@ -16,10 +22,26 @@ import type { WorldConfig } from '../core/types.ts';
  * ブラウザ側からは読まれない。node:worker_threads を使うので core/ には置けない。
  */
 
+/** 1条件を回して統計だけ返す */
 export interface Job {
+  kind?: 'run';
   config: WorldConfig;
   steps: number;
   tail: number;
+}
+
+/** 1条件を回して途中経過も返す */
+export interface TraceJob extends TraceOptions {
+  kind: 'trace';
+  config: WorldConfig;
+}
+
+export type AnyJob = Job | TraceJob;
+
+function execute(job: AnyJob): RunResult | TraceResult {
+  return job.kind === 'trace'
+    ? runTrace(job.config, job)
+    : runOne(job.config, job.steps, job.tail);
 }
 
 /**
@@ -56,23 +78,38 @@ export async function closePool(): Promise<void> {
   await Promise.all(ws.map((w) => w.terminate()));
 }
 
-/** 全ジョブを回して、渡した順に結果を返す。onDone は終わった件数を受け取る */
+/** 統計だけ要るとき */
 export async function runMany(
   jobs: Job[],
   onDone?: (finished: number) => void,
 ): Promise<RunResult[]> {
+  return dispatch(jobs, onDone) as Promise<RunResult[]>;
+}
+
+/** 途中経過も要るとき。トレースは1本が長いので、直列だと全体の半分を食う */
+export async function traceMany(
+  jobs: TraceJob[],
+  onDone?: (finished: number) => void,
+): Promise<TraceResult[]> {
+  return dispatch(jobs, onDone) as Promise<TraceResult[]>;
+}
+
+async function dispatch(
+  jobs: AnyJob[],
+  onDone?: (finished: number) => void,
+): Promise<(RunResult | TraceResult)[]> {
   const n = Math.min(poolSize(), jobs.length);
   let finished = 0;
 
   if (n <= 1) {
     return jobs.map((j) => {
-      const r = runOne(j.config, j.steps, j.tail);
+      const r = execute(j);
       onDone?.(++finished);
       return r;
     });
   }
 
-  const results = new Array<RunResult>(jobs.length);
+  const results = new Array<RunResult | TraceResult>(jobs.length);
   const ws = workers(n);
   let next = 0;
 
@@ -82,7 +119,7 @@ export async function runMany(
     ws.slice(0, n).map(
       (w) =>
         new Promise<void>((resolve, reject) => {
-          const onMessage = (m: { index: number; result: RunResult }) => {
+          const onMessage = (m: { index: number; result: RunResult | TraceResult }) => {
             results[m.index] = m.result;
             onDone?.(++finished);
             feed();

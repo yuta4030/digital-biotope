@@ -2,6 +2,72 @@ import { World } from '../core/world.ts';
 import { step } from '../core/step.ts';
 import type { WorldConfig } from '../core/types.ts';
 
+/**
+ * 途中経過を記録しながら1条件を回す。
+ *
+ * 遺伝する形質は世代を通してしか動かないので、後半平均だけでは
+ * 「まだ動いている途中」と「落ち着いた」が区別できない。
+ * 収束を主張するには経過を並べる必要がある（docs/reports/07 参照）。
+ */
+export interface TraceOptions {
+  steps: number;
+  /** 何ステップごとに記録するか */
+  every: number;
+  /** 最後に速度の分布も返す場合の刻み幅 */
+  histogramBin?: number;
+}
+
+export interface TraceMark {
+  step: number;
+  /** 種インデックス別の平均速度と標準偏差 */
+  speedMean: number[];
+  speedSd: number[];
+  population: number[];
+}
+
+export interface TraceResult {
+  marks: TraceMark[];
+  /** 種インデックス0の速度の分布。histogramBin を指定したときだけ入る */
+  histogram?: { bin: number; counts: number[]; total: number };
+}
+
+export function runTrace(config: WorldConfig, opts: TraceOptions): TraceResult {
+  const w = new World(config);
+  const n = w.defs.length;
+  const mean = new Float64Array(n);
+  const sd = new Float64Array(n);
+  const counts = new Int32Array(n);
+  const marks: TraceMark[] = [];
+
+  for (let s = 0; s < opts.steps; s++) {
+    step(w);
+    if ((s + 1) % opts.every !== 0) continue;
+
+    w.speedStats(mean, sd);
+    w.countBySpecies(counts);
+    marks.push({
+      step: s + 1,
+      speedMean: Array.from(mean),
+      speedSd: Array.from(sd),
+      population: Array.from(counts),
+    });
+  }
+
+  if (opts.histogramBin === undefined) return { marks };
+
+  const bin = opts.histogramBin;
+  const hist: number[] = [];
+  let total = 0;
+  for (let i = 0; i < w.count; i++) {
+    if (w.aSpecies[i] !== 0) continue;
+    const b = Math.floor(w.aSpeed[i] / bin);
+    while (hist.length <= b) hist.push(0);
+    hist[b]++;
+    total++;
+  }
+  return { marks, histogram: { bin, counts: hist, total } };
+}
+
 export interface SpeciesResult {
   id: number;
   name: string;

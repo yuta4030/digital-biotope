@@ -1,6 +1,5 @@
 import { presetByKey } from '../../../src/core/presets.ts';
-import { World } from '../../../src/core/world.ts';
-import { step } from '../../../src/core/step.ts';
+import { traceMany, type TraceJob } from '../../../src/sweep/pool.ts';
 import { trial, header, done, mark, speedOf, banner } from './_lib.ts';
 import type { WorldConfig } from '../../../src/core/types.ts';
 
@@ -68,6 +67,13 @@ function build(o: Opts): () => WorldConfig {
   };
 }
 
+/** トレース用のジョブ。シードだけ差し替える */
+function job(o: Opts, seed: number, steps: number, every: number): TraceJob {
+  const config = build(o)();
+  config.seed = seed;
+  return { kind: 'trace', config, steps, every };
+}
+
 async function row(label: string, o: Opts, seeds = SEEDS_8, long = true): Promise<void> {
   const t = await trial(build(o), {
     seeds,
@@ -89,28 +95,16 @@ async function row(label: string, o: Opts, seeds = SEEDS_8, long = true): Promis
  * 中間に落ち着いた集団が同じ数字になる。割れているかどうかは
  * 平均する前の値を並べないと見えない。
  */
-function tracePerSeed(label: string, o: Opts, steps: number, every: number): void {
+async function tracePerSeed(label: string, o: Opts, steps: number, every: number): Promise<void> {
   console.log(`  ${label}`);
-  for (const seed of SEEDS_8) {
-    const cfg = build(o)();
-    cfg.seed = seed;
-    const w = new World(cfg);
-    const mean = new Float64Array(w.defs.length);
-    const sd = new Float64Array(w.defs.length);
-    const counts = new Int32Array(w.defs.length);
-    const marks: string[] = [];
+  const rs = await traceMany(SEEDS_8.map((seed) => job(o, seed, steps, every)));
 
-    for (let s = 0; s < steps; s++) {
-      step(w);
-      if ((s + 1) % every === 0) {
-        w.countBySpecies(counts);
-        w.speedStats(mean, sd);
-        const gone = Array.from(counts).some((c) => c === 0);
-        marks.push(gone ? ' 崩壊 ' : mean[0].toFixed(2));
-      }
-    }
-    console.log(`    seed ${seed}  ${marks.join('  →  ')}`);
-  }
+  rs.forEach((r, i) => {
+    const marks = r.marks.map((m) =>
+      m.population.some((c) => c === 0) ? ' 崩壊 ' : m.speedMean[0].toFixed(2),
+    );
+    console.log(`    seed ${SEEDS_8[i]}  ${marks.join('  →  ')}`);
+  });
 }
 
 /**
@@ -120,30 +114,24 @@ function tracePerSeed(label: string, o: Opts, steps: number, every: number): voi
  * 「1つの集団の中で二型に割れる」のかは平均と標準偏差では区別できない。
  * 二山になっていれば後者、単峰なら前者。
  */
-function histogram(label: string, o: Opts, seed: number, steps: number): void {
-  const cfg = build(o)();
-  cfg.seed = seed;
-  const w = new World(cfg);
-  for (let s = 0; s < steps; s++) step(w);
-
-  const mean = new Float64Array(w.defs.length);
-  const sd = new Float64Array(w.defs.length);
-  w.speedStats(mean, sd);
-
+async function histograms(label: string, o: Opts, seeds: number[], steps: number): Promise<void> {
   const BIN = 0.25;
-  const bins = new Int32Array(20);
-  let n = 0;
-  for (let i = 0; i < w.count; i++) {
-    if (w.aSpecies[i] !== 0) continue;
-    bins[Math.min(bins.length - 1, Math.floor(w.aSpeed[i] / BIN))]++;
-    n++;
-  }
+  const rs = await traceMany(
+    seeds.map((seed) => ({ ...job(o, seed, steps, steps), histogramBin: BIN })),
+  );
 
-  console.log(`  ${label} seed ${seed}: 平均 ${mean[0].toFixed(2)} ± ${sd[0].toFixed(2)}（個体数 ${n}）`);
-  bins.forEach((c, i) => {
-    if (c === 0) return;
-    const bar = '#'.repeat(Math.round((c / n) * 40)) || '.';
-    console.log(`    ${(i * BIN).toFixed(2)}-${((i + 1) * BIN).toFixed(2)}  ${String(c).padStart(4)}  ${bar}`);
+  rs.forEach((r, i) => {
+    const last = r.marks[r.marks.length - 1];
+    const h = r.histogram!;
+    console.log(
+      `  ${label} seed ${seeds[i]}: 平均 ${last.speedMean[0].toFixed(2)} ± ` +
+        `${last.speedSd[0].toFixed(2)}（個体数 ${h.total}）`,
+    );
+    h.counts.forEach((c, b) => {
+      if (c === 0) return;
+      const bar = '#'.repeat(Math.round((c / h.total) * 40)) || '.';
+      console.log(`    ${(b * h.bin).toFixed(2)}-${((b + 1) * h.bin).toFixed(2)}  ${String(c).padStart(4)}  ${bar}`);
+    });
   });
 }
 
@@ -154,27 +142,10 @@ function histogram(label: string, o: Opts, seed: number, steps: number): void {
  * 区別できない。上から出発した集団は降りるのが遅いので、
  * 到達したのかどうかは経過を並べて見るしかない。
  */
-function trace(label: string, o: Opts, steps: number, every: number): void {
-  const rows = SEEDS_3.map((seed) => {
-    const cfg = build(o)();
-    cfg.seed = seed;
-    const w = new World(cfg);
-    const mean = new Float64Array(w.defs.length);
-    const sd = new Float64Array(w.defs.length);
-    const marks: number[] = [];
-
-    for (let s = 0; s < steps; s++) {
-      step(w);
-      if ((s + 1) % every === 0) {
-        w.speedStats(mean, sd);
-        marks.push(mean[0]);
-      }
-    }
-    return marks;
-  });
-
-  const avg = rows[0].map(
-    (_, i) => rows.reduce((a, r) => a + r[i], 0) / rows.length,
+async function trace(label: string, o: Opts, steps: number, every: number): Promise<void> {
+  const rs = await traceMany(SEEDS_3.map((seed) => job(o, seed, steps, every)));
+  const avg = rs[0].marks.map(
+    (_, i) => rs.reduce((a, r) => a + r.marks[i].speedMean[0], 0) / rs.length,
   );
   console.log(`  ${label.padEnd(24)} ${avg.map((v) => v.toFixed(2)).join('  →  ')}`);
 }
@@ -206,8 +177,8 @@ for (const start of [1, 3]) {
 
 header('平均速度の推移（3シード・10000ステップごと）');
 for (const start of [1, 4]) {
-  trace(`初期 ${start.toFixed(1)} 捕食者あり`, { start }, 40000, 10000);
-  trace(`初期 ${start.toFixed(1)} 肉食なし`, { start, predator: false }, 40000, 10000);
+  await trace(`初期 ${start.toFixed(1)} 捕食者あり`, { start }, 40000, 10000);
+  await trace(`初期 ${start.toFixed(1)} 肉食なし`, { start, predator: false }, 40000, 10000);
 }
 
 // ---------------------------------------------------------------------------
@@ -220,7 +191,7 @@ await row('視野3 捕食者あり', { start: 1, vision: 3 }, SEEDS_8, false);
 await row('視野3 肉食なし', { start: 1, vision: 3, predator: false }, SEEDS_8, false);
 
 header('視野3で上から出発する（3シード・10000ステップごと）');
-trace('初期 3.0 捕食者あり', { start: 3, vision: 3 }, 40000, 10000);
+await trace('初期 3.0 捕食者あり', { start: 3, vision: 3 }, 40000, 10000);
 
 // 視野3では捕食者がいるほうが遅い（0.76 対 0.83）。
 // 捕食者が草食を減らして草の奪い合いが緩んだせいか、を確かめようとした節。
@@ -278,14 +249,12 @@ for (const gain of [16, 18, 22, 26, 32]) {
 // 平均だけ見ると「中間に落ち着いた」ように読めるが、
 // シードごとに並べると2つの行き先に割れている
 header('視野3・利得26でシードごとに並べる（10000ステップごと）');
-tracePerSeed('視野3 利得26', { start: 1, vision: 3, gainFromPrey: 26 }, 40000, 10000);
+await tracePerSeed('視野3 利得26', { start: 1, vision: 3, gainFromPrey: 26 }, 40000, 10000);
 
 // 2つの行き先それぞれで集団内の分布を見る。単峰なら試行ごとの分岐、
 // 二山なら1つの集団の中で二型が共存していることになる
 header('分岐した先での集団内の分布（40000ステップ時点）');
-for (const seed of [1000, 5000, 7000, 4000]) {
-  histogram('視野3 利得26', { start: 1, vision: 3, gainFromPrey: 26 }, seed, 40000);
-}
+await histograms('視野3 利得26', { start: 1, vision: 3, gainFromPrey: 26 }, [1000, 5000, 7000, 4000], 40000);
 
 // ---------------------------------------------------------------------------
 // 進化が辿り着いた速度は、集団にとって良い場所なのか。
@@ -310,7 +279,7 @@ for (const sigma of [0.01, 0.02, 0.05, 0.1, 0.2]) {
 
 header('変異が弱いときの推移（3シード・20000ステップごと）');
 for (const sigma of [0.01, 0.02, 0.05]) {
-  trace(`σ=${sigma.toFixed(2)}`, { start: 1, sigma }, 80000, 20000);
+  await trace(`σ=${sigma.toFixed(2)}`, { start: 1, sigma }, 80000, 20000);
 }
 
 await done(t0);
