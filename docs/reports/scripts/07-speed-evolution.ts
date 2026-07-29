@@ -82,6 +82,37 @@ function row(label: string, o: Opts, seeds = SEEDS_8, long = true): void {
 }
 
 /**
+ * シードごとの平均速度の推移を1行ずつ出す。
+ *
+ * シード間で平均してしまうと、行き先が2つに割れている集団と
+ * 中間に落ち着いた集団が同じ数字になる。割れているかどうかは
+ * 平均する前の値を並べないと見えない。
+ */
+function tracePerSeed(label: string, o: Opts, steps: number, every: number): void {
+  console.log(`  ${label}`);
+  for (const seed of SEEDS_8) {
+    const cfg = build(o)();
+    cfg.seed = seed;
+    const w = new World(cfg);
+    const mean = new Float64Array(w.defs.length);
+    const sd = new Float64Array(w.defs.length);
+    const counts = new Int32Array(w.defs.length);
+    const marks: string[] = [];
+
+    for (let s = 0; s < steps; s++) {
+      step(w);
+      if ((s + 1) % every === 0) {
+        w.countBySpecies(counts);
+        w.speedStats(mean, sd);
+        const gone = Array.from(counts).some((c) => c === 0);
+        marks.push(gone ? ' 崩壊 ' : mean[0].toFixed(2));
+      }
+    }
+    console.log(`    seed ${seed}  ${marks.join('  →  ')}`);
+  }
+}
+
+/**
  * 平均速度の時間発展を出す。
  *
  * 後半だけを平均する表では「まだ動いている途中」と「落ち着いた」が
@@ -207,6 +238,12 @@ header('捕食利得で捕食圧を振る・視野3（8シード・重い）');
 for (const gain of [16, 18, 22, 26, 32]) {
   pressureRow(`利得 ${gain} 視野3`, { start: 1, vision: 3, gainFromPrey: gain }, gain);
 }
+
+// 視野3で捕食圧を上げた行はシード間の幅が広い（利得26で 0.77-2.27）。
+// 平均だけ見ると「中間に落ち着いた」ように読めるが、
+// シードごとに並べると2つの行き先に割れている
+header('視野3・利得26でシードごとに並べる（10000ステップごと）');
+tracePerSeed('視野3 利得26', { start: 1, vision: 3, gainFromPrey: 26 }, 40000, 10000);
 
 // ---------------------------------------------------------------------------
 // 進化が辿り着いた速度は、集団にとって良い場所なのか。
