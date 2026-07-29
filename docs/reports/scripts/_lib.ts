@@ -14,11 +14,14 @@ export interface Trial {
     mean: number;
     min: number;
     max: number;
-    /** シード間で平均した移動速度。速度が遺伝しない種では定義値 */
+    /**
+     * 速度を測れた試行だけで平均した移動速度。速度が遺伝しない種では定義値。
+     * 絶滅した試行は除いてある。混ぜると初期速度に引き寄せられた偽の数字になる
+     */
     speed: number;
-    /** 集団内のばらつき（各試行の標準偏差をシード間で平均したもの） */
+    /** 集団内のばらつき（各試行の標準偏差を平均したもの） */
     speedSd: number;
-    /** シードごとの到達速度。収束したのか散らばったのかを見るため */
+    /** 速度を測れた試行の到達速度。収束したのか散らばったのかを見るため */
     speedBySeed: number[];
   }[];
   /** 崩壊した試行の絶滅ステップ */
@@ -47,21 +50,33 @@ export function trial(
     survived: rs.filter((r) => r.survived).length,
     total: seeds.length,
     extinctAt: rs.filter((r) => !r.survived).map((r) => r.extinctAt),
-    species: rs[0].species.map((s, i) => ({
-      name: s.name,
-      mean: rs.reduce((a, r) => a + r.species[i].mean, 0) / seeds.length,
-      min: Math.min(...rs.map((r) => r.species[i].min)),
-      max: Math.max(...rs.map((r) => r.species[i].max)),
-      speed: rs.reduce((a, r) => a + r.species[i].speedMean, 0) / seeds.length,
-      speedSd: rs.reduce((a, r) => a + r.species[i].speedSd, 0) / seeds.length,
-      speedBySeed: rs.map((r) => r.species[i].speedMean),
-    })),
+    species: rs[0].species.map((s, i) => {
+      // 絶滅した試行の速度は測定値ではなく定義値なので、平均から外す
+      const measured = rs.map((r) => r.species[i]).filter((x) => x.speedSamples > 0);
+      const speeds = measured.map((x) => x.speedMean);
+      return {
+        name: s.name,
+        mean: rs.reduce((a, r) => a + r.species[i].mean, 0) / seeds.length,
+        min: Math.min(...rs.map((r) => r.species[i].min)),
+        max: Math.max(...rs.map((r) => r.species[i].max)),
+        speed: speeds.length > 0 ? speeds.reduce((a, b) => a + b, 0) / speeds.length : NaN,
+        speedSd:
+          measured.length > 0
+            ? measured.reduce((a, x) => a + x.speedSd, 0) / measured.length
+            : NaN,
+        speedBySeed: speeds,
+      };
+    }),
   };
 }
 
-/** 進化した速度を「平均 (最小-最大)」で出す。シード間のばらつきを隠さないため */
+/**
+ * 進化した速度を「平均 (最小-最大)」で出す。シード間のばらつきを隠さないため。
+ * 一度も測れなかった場合は数字を出さない
+ */
 export function speedOf(t: Trial, speciesIdx = 0): string {
   const s = t.species[speciesIdx];
+  if (s.speedBySeed.length === 0) return '— (測定なし)';
   const lo = Math.min(...s.speedBySeed);
   const hi = Math.max(...s.speedBySeed);
   return `${s.speed.toFixed(2)} (${lo.toFixed(2)}-${hi.toFixed(2)})`;

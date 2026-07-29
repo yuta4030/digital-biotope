@@ -10,7 +10,7 @@ import type { WorldConfig } from '../../../src/core/types.ts';
  *   node docs/reports/scripts/07-speed-evolution.ts
  *
  * 「進化」構成で、速度がどこへ落ち着くかと、そこが集団にとって
- * 良い場所なのかを調べる。所要43分ほど（視野ありの節と、変異が弱い節が重い）。
+ * 良い場所なのかを調べる。所要75分ほど（視野ありの節が重い）。
  */
 
 const t0 = performance.now();
@@ -39,8 +39,15 @@ interface Opts {
   vision?: number;
   /** 草食の基礎代謝。上げると平衡個体数が下がる */
   metabolism?: number;
+  /** 捕食1回で肉食が得るエネルギー。上げると養われる捕食者が増え、捕食圧が上がる */
+  gainFromPrey?: number;
+  /** 同じセルの獲物を捕らえる確率。1回あたりの危険さ */
+  captureRate?: number;
   predator?: boolean;
 }
+
+/** 肉食の実効代謝。0.2 + 速度コスト0.15×2 + 視野コスト0.025×3 */
+const PRED_METABOLISM = 0.575;
 
 function build(o: Opts): () => WorldConfig {
   return () => {
@@ -52,6 +59,8 @@ function build(o: Opts): () => WorldConfig {
     if (o.speedCost !== undefined) herb.speedCost = o.speedCost;
     if (o.vision !== undefined) herb.visionRange = o.vision;
     if (o.metabolism !== undefined) herb.metabolism = o.metabolism;
+    if (o.gainFromPrey !== undefined) pred.gainFromPrey = o.gainFromPrey;
+    if (o.captureRate !== undefined) pred.captureRate = o.captureRate;
     if (o.predator === false) pred.initialCount = 0;
 
     return cfg;
@@ -154,6 +163,50 @@ trace('初期 3.0 捕食者あり', { start: 3, vision: 3 }, 40000, 10000);
 header('視野3・肉食なしで代謝を上げて密度を揃える（4シード）');
 row('代謝 0.25（既定）', { start: 1, vision: 3, predator: false }, SEEDS_4, false);
 row('代謝 0.44', { start: 1, vision: 3, predator: false, metabolism: 0.44 }, SEEDS_4, false);
+
+// ---------------------------------------------------------------------------
+// 捕食圧そのものを振る。
+//
+// 捕食者の頭数と捕食圧は別物で、視野3のほうが肉食は多い（461 対 337）のに
+// 速度は低い。頭数ではなく「草食1個体あたり毎ステップどれだけ食われるか」で
+// 見ないと、速度が何に反応しているのか分からない
+// ---------------------------------------------------------------------------
+
+/**
+ * 定常状態では、捕食で得るエネルギーが捕食者の代謝と釣り合っている。
+ * そこから毎ステップの捕食回数を逆算し、草食1個体あたりの被捕食率にする。
+ */
+function pressureRow(label: string, o: Opts, gain: number, seeds = SEEDS_8): void {
+  const t = trial(build(o), { seeds, steps: 15000, tail: 3000 });
+  const [herb, pred] = t.species;
+
+  if (t.survived === 0) {
+    console.log(`  ${label.padEnd(20)} --0/${t.total}  （崩壊）`);
+    return;
+  }
+  const risk = ((pred.mean * PRED_METABOLISM) / gain / herb.mean) * 100;
+  console.log(
+    `  ${label.padEnd(20)} ${mark(t)}${t.survived}/${t.total}  ` +
+      `速度 ${speedOf(t).padEnd(20)} ` +
+      `草食 ${herb.mean.toFixed(0).padStart(4)}  肉食 ${pred.mean.toFixed(0).padStart(4)}  ` +
+      `被捕食率 ${risk.toFixed(2)}%/step`,
+  );
+}
+
+header('捕獲成功率を振る（8シード）: つまみとして使えるか');
+for (const cr of [0.02, 0.04, 0.08, 0.15]) {
+  pressureRow(`成功率 ${cr.toFixed(2)}`, { start: 1, captureRate: cr }, 18);
+}
+
+header('捕食利得で捕食圧を振る・視野0（8シード）');
+for (const gain of [14, 16, 18, 22, 26, 32]) {
+  pressureRow(`利得 ${gain}`, { start: 1, gainFromPrey: gain }, gain);
+}
+
+header('捕食利得で捕食圧を振る・視野3（8シード・重い）');
+for (const gain of [16, 18, 22, 26, 32]) {
+  pressureRow(`利得 ${gain} 視野3`, { start: 1, vision: 3, gainFromPrey: gain }, gain);
+}
 
 // ---------------------------------------------------------------------------
 // 進化が辿り着いた速度は、集団にとって良い場所なのか。

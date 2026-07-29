@@ -10,10 +10,16 @@ export interface SpeciesResult {
   max: number;
   /**
    * 集計区間での平均移動速度と、集団内のばらつき（標準偏差の平均）。
-   * 速度が遺伝しない種では定義値と0になる。
+   *
+   * speedSamples が0のとき、この値は測定値ではなく定義値。
+   * 種が絶滅していても定義値が入るので、**生存しなかった試行の速度を
+   * そのまま平均に混ぜてはいけない**。混ぜると初期速度に引き寄せられた
+   * 偽の数字が出る。
    */
   speedMean: number;
   speedSd: number;
+  /** 速度を実際に測れた回数。0 なら集計区間にこの種の個体がいなかった */
+  speedSamples: number;
 }
 
 export interface RunResult {
@@ -108,6 +114,7 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
       max: max[i],
       speedMean: speedSamples[i] > 0 ? speedMeanSum[i] / speedSamples[i] : def.speed,
       speedSd: speedSamples[i] > 0 ? speedSdSum[i] / speedSamples[i] : 0,
+      speedSamples: speedSamples[i],
     })),
   };
 }
@@ -184,8 +191,9 @@ export function runSweep(
         mean: avg(results.map((r) => r.species[i].mean)),
         min: Math.min(...results.map((r) => r.species[i].min)),
         max: Math.max(...results.map((r) => r.species[i].max)),
-        speedMean: avg(results.map((r) => r.species[i].speedMean)),
-        speedSd: avg(results.map((r) => r.species[i].speedSd)),
+        // 測れた試行だけで平均する。絶滅した試行の定義値を混ぜると
+        // 初期速度に引き寄せられた偽の数字になる
+        ...speedOver(results.map((r) => r.species[i])),
       })),
     });
 
@@ -198,6 +206,25 @@ export function runSweep(
 
 function avg(xs: number[]): number {
   return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+
+/**
+ * 複数試行の速度をまとめる。測れた試行が1つも無ければ、
+ * 定義値をそのまま返したうえで speedSamples を0にして知らせる。
+ */
+function speedOver(
+  rs: SpeciesResult[],
+): Pick<SpeciesResult, 'speedMean' | 'speedSd' | 'speedSamples'> {
+  const measured = rs.filter((r) => r.speedSamples > 0);
+  const samples = rs.reduce((a, r) => a + r.speedSamples, 0);
+  if (measured.length === 0) {
+    return { speedMean: rs[0].speedMean, speedSd: 0, speedSamples: 0 };
+  }
+  return {
+    speedMean: avg(measured.map((r) => r.speedMean)),
+    speedSd: avg(measured.map((r) => r.speedSd)),
+    speedSamples: samples,
+  };
 }
 
 /** 表計算や pandas で読める形にする */
