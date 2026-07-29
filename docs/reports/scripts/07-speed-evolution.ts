@@ -9,7 +9,7 @@ import type { WorldConfig } from '../../../src/core/types.ts';
  *   node docs/reports/scripts/07-speed-evolution.ts
  *
  * 「進化」構成で、速度がどこへ落ち着くかと、そこが集団にとって
- * 良い場所なのかを調べる。所要75分ほど（視野ありの節が重い）。
+ * 良い場所なのかを調べる。4スレッドで23分ほど（直列だと82分）。
  */
 
 const t0 = performance.now();
