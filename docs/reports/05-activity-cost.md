@@ -2,7 +2,7 @@
 
 速度と視野に維持費を持たせたら、目に投資する価値がどこから来るのかが見えた記録。
 
-- 実行: `node docs/reports/scripts/05-activity-cost.ts`（約5分）
+- 実行: `node docs/reports/scripts/05-activity-cost.ts`（4 worker で115秒）
 - 条件: 8000ステップ、後半4000ステップで統計、5〜8シード
 
 ## きっかけ

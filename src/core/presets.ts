@@ -19,6 +19,8 @@ function animal(
     reproduceCost: 0.5,
     speed: 1,
     visionRange: 0,
+    // 既定では空腹にならない。捕食者が見えている限り逃げ続ける
+    hungerThreshold: 0,
     maxAge: 0,
     // 既定では死骸は消える。閉じたループにするのは「還元」を測るときだけ
     corpseGrass: 0,
@@ -359,6 +361,49 @@ presets.push({
         reproduceThreshold: 40,
         reproduceProb: 0.06,
         speed: 2,
+        visionRange: 3,
+        initialCount: 40,
+        initialEnergy: 25,
+      }),
+    ]),
+});
+
+presets.push({
+  key: 'hunger',
+  label: '空腹（速度差なし）',
+  description:
+    '追跡構成から速度差を取り、代わりに草食に空腹閾値8を与えたもの。' +
+    '腹が減った個体は捕食者が見えていても餌を探しに出るので、等速でも遭遇が起きる。' +
+    '空腹閾値を0にすると（速度差が無いので）肉食は必ず餓死する。',
+  build: () =>
+    world([
+      animal({
+        id: 1,
+        name: '草食動物',
+        color: '#5ec8f2',
+        eatsGrass: true,
+        metabolism: 0.6,
+        gainFromGrass: 4,
+        reproduceThreshold: 20,
+        reproduceProb: 0.08,
+        speed: 1,
+        visionRange: 2,
+        // 繁殖閾値20に対して8。空腹の個体だけが逃走をやめて採餌に出る
+        hungerThreshold: 8,
+        initialCount: 400,
+      }),
+      animal({
+        id: 2,
+        name: '肉食動物',
+        color: '#f2615e',
+        preys: [1],
+        metabolism: 0.6,
+        gainFromPrey: 18,
+        // 速度差が無いぶん遭遇が減るので、追跡構成の0.04より高くしないと足りない
+        captureRate: 0.1,
+        reproduceThreshold: 40,
+        reproduceProb: 0.06,
+        speed: 1,
         visionRange: 3,
         initialCount: 40,
         initialEnergy: 25,
