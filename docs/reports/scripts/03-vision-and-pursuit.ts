@@ -1,7 +1,7 @@
 import { World } from '../../../src/core/world.ts';
 import { step } from '../../../src/core/step.ts';
 import { presetByKey } from '../../../src/core/presets.ts';
-import { trial, line, header, done } from './_lib.ts';
+import { group, line, header, done, banner } from './_lib.ts';
 
 /**
  * レポート03: 視野と追跡
@@ -9,10 +9,12 @@ import { trial, line, header, done } from './_lib.ts';
  *   node docs/reports/scripts/03-vision-and-pursuit.ts
  *
  * 視野の計算コストと、追跡を成立させるのに何が要るか。
- * 視野ありは遅いので所要10分ほど。
+ * 視野ありは重いので並列に回す（スレッド数は BIOTOPE_WORKERS で変えられる）。
+ * 冒頭の steps/sec だけは1スレッドの速度そのものを測るので直列のまま。
  */
 
 const t0 = performance.now();
+banner();
 const SEEDS_6 = [1000, 2000, 3000, 4000, 5000, 6000];
 
 header('視野の計算コスト（草食のみ・約1000個体）');
@@ -48,48 +50,50 @@ function pursuit(o: {
 }
 
 header('捕獲成功率なし（=1.0）だと共存域が無い');
-for (const cSpeed of [1, 2, 3]) {
-  line(`草食視野2 肉食速度${cSpeed}`, trial(() => pursuit({ hVision: 2, cVision: 3, cSpeed })), {
-    range: false,
-  });
-}
+await group(
+  [1, 2, 3],
+  (cSpeed) => pursuit({ hVision: 2, cVision: 3, cSpeed }),
+  (cSpeed, t) => line(`草食視野2 肉食速度${cSpeed}`, t, { range: false }),
+);
 
 header('捕獲成功率を下げる（草食視野2 / 肉食 速度2・視野3・利得18）');
-for (const cap of [0.5, 0.25, 0.12, 0.08, 0.05, 0.03]) {
-  line(`成功率${cap}`, trial(() => pursuit({ hVision: 2, cVision: 3, cSpeed: 2, cap })), {
-    range: false,
-  });
-}
+await group(
+  [0.5, 0.25, 0.12, 0.08, 0.05, 0.03],
+  (cap) => pursuit({ hVision: 2, cVision: 3, cSpeed: 2, cap }),
+  (cap, t) => line(`成功率${cap}`, t, { range: false }),
+);
 
 header('速度差が無いと成功率は効かない（遭遇そのものが起きない）');
-for (const cap of [0.5, 0.12, 0.03]) {
-  line(`速度1 成功率${cap}`, trial(() => pursuit({ hVision: 2, cVision: 3, cSpeed: 1, cap })), {
-    range: false,
-  });
-}
+await group(
+  [0.5, 0.12, 0.03],
+  (cap) => pursuit({ hVision: 2, cVision: 3, cSpeed: 1, cap }),
+  (cap, t) => line(`速度1 成功率${cap}`, t, { range: false }),
+);
 
 header(`採用値の確認（${SEEDS_6.length}シード）`);
-for (const [cap, gain] of [
-  [0.03, 18],
-  [0.04, 18],
-  [0.05, 18],
-  [0.06, 18],
-  [0.03, 30],
-] as const) {
-  line(
-    `成功率${cap} 利得${gain}`,
-    trial(() => pursuit({ hVision: 2, cVision: 3, cSpeed: 2, cap, gain }), { seeds: SEEDS_6 }),
-  );
-}
+await group(
+  [
+    [0.03, 18],
+    [0.04, 18],
+    [0.05, 18],
+    [0.06, 18],
+    [0.03, 30],
+  ] as const,
+  ([cap, gain]) => pursuit({ hVision: 2, cVision: 3, cSpeed: 2, cap, gain }),
+  ([cap, gain], t) => line(`成功率${cap} 利得${gain}`, t),
+  { seeds: SEEDS_6 },
+);
 
 // 採用値では壊れない。詳しくは 06-enrichment.ts
 header('採用値では草食の繁殖確率を上げても壊れない');
-for (const rp of [0.08, 0.12, 0.16, 0.2]) {
-  line(`草食の繁殖確率${rp}`, trial(() => {
+await group(
+  [0.08, 0.12, 0.16, 0.2],
+  (rp) => {
     const cfg = pursuit({ hVision: 2, cVision: 3, cSpeed: 2, cap: 0.04 });
     cfg.species[0].reproduceProb = rp;
     return cfg;
-  }), { range: false });
-}
+  },
+  (rp, t) => line(`草食の繁殖確率${rp}`, t, { range: false }),
+);
 
 done(t0);

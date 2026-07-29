@@ -6,6 +6,7 @@ import { runSweep, toCsv, type SweepAxis } from './sweep.ts';
  * パラメータ探索を回して CSV に落とす。
  *
  *   npm run sweep
+ *   BIOTOPE_WORKERS=1 npm run sweep   直列で回す（並列版との突き合わせ用）
  *
  * 調べたい軸はここを直接書き換える。UI から回せるようにするより、
  * 軸の定義をコードで書けたほうが自由度が高い。
@@ -30,7 +31,7 @@ const REPEATS = 3;
 
 const t0 = performance.now();
 
-const rows = runSweep(defaultConfig(), axes, {
+const rows = await runSweep(defaultConfig(), axes, {
   steps: STEPS,
   tail: TAIL,
   repeats: REPEATS,

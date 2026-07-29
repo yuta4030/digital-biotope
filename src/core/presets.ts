@@ -19,7 +19,12 @@ function animal(
     reproduceCost: 0.5,
     speed: 1,
     visionRange: 0,
+    // 既定では空腹にならない。捕食者が見えている限り逃げ続ける
+    hungerThreshold: 0,
     maxAge: 0,
+    // 既定では死骸は消える。閉じたループにするのは「還元」を測るときだけ
+    corpseGrass: 0,
+    corpseSpread: 0,
     initialCount: 100,
     initialEnergy: 15,
     ...p,
@@ -311,6 +316,95 @@ presets.push({
         reproduceProb: 0.06,
         speed: 2,
         visionRange: 3, // 実効代謝 0.2 + 0.3 + 0.075 = 0.575
+        initialCount: 40,
+        initialEnergy: 25,
+      }),
+    ]),
+});
+
+presets.push({
+  key: 'evolution',
+  label: '進化（速度が遺伝する）',
+  description:
+    '草食動物の移動速度が個体ごとに違い、子は親の速度をわずかにずらして受け継ぐ。' +
+    '速いほど実効代謝が上がるので、速度は釣り合う位置に落ち着く。' +
+    '既定では初期速度1から約2.7まで上がるが、肉食の初期個体数を0にしてリセットすると' +
+    '逆に約1.1まで下がる。速い足の価値は捕食圧が生んでいる（README参照）。',
+  build: () =>
+    world([
+      animal({
+        id: 1,
+        name: '草食動物',
+        color: '#5ec8f2',
+        eatsGrass: true,
+        metabolism: 0.25,
+        speedCost: 0.15,
+        gainFromGrass: 4,
+        reproduceThreshold: 20,
+        reproduceProb: 0.08,
+        // 視野を持たせない。捕食者を見て逃げられると速い足の出番が無くなる
+        speed: 1,
+        visionRange: 0,
+        mutation: { speedSigma: 0.05, speedMin: 0, speedMax: 4 },
+        initialCount: 400,
+      }),
+      animal({
+        id: 2,
+        name: '肉食動物',
+        color: '#f2615e',
+        preys: [1],
+        metabolism: 0.2,
+        speedCost: 0.15,
+        visionCost: 0.025,
+        gainFromPrey: 18,
+        captureRate: 0.04,
+        reproduceThreshold: 40,
+        reproduceProb: 0.06,
+        speed: 2,
+        visionRange: 3,
+        initialCount: 40,
+        initialEnergy: 25,
+      }),
+    ]),
+});
+
+presets.push({
+  key: 'hunger',
+  label: '空腹（速度差なし）',
+  description:
+    '追跡構成から速度差を取り、代わりに草食に空腹閾値8を与えたもの。' +
+    '腹が減った個体は捕食者が見えていても餌を探しに出るので、等速でも遭遇が起きる。' +
+    '空腹閾値を0にすると（速度差が無いので）肉食は必ず餓死する。',
+  build: () =>
+    world([
+      animal({
+        id: 1,
+        name: '草食動物',
+        color: '#5ec8f2',
+        eatsGrass: true,
+        metabolism: 0.6,
+        gainFromGrass: 4,
+        reproduceThreshold: 20,
+        reproduceProb: 0.08,
+        speed: 1,
+        visionRange: 2,
+        // 繁殖閾値20に対して8。空腹の個体だけが逃走をやめて採餌に出る
+        hungerThreshold: 8,
+        initialCount: 400,
+      }),
+      animal({
+        id: 2,
+        name: '肉食動物',
+        color: '#f2615e',
+        preys: [1],
+        metabolism: 0.6,
+        gainFromPrey: 18,
+        // 速度差が無いぶん遭遇が減るので、追跡構成の0.04より高くしないと足りない
+        captureRate: 0.1,
+        reproduceThreshold: 40,
+        reproduceProb: 0.06,
+        speed: 1,
+        visionRange: 3,
         initialCount: 40,
         initialEnergy: 25,
       }),
