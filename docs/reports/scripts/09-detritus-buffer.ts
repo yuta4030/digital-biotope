@@ -239,4 +239,38 @@ for (const spread of [0, 1, 3]) {
   );
 }
 
+// ---------------------------------------------------------------------------
+header('6. 集中の何が悪いのか: 手が届く範囲を広げてみる');
+console.log('  盤面全体には餌があっても、1個体が1ステップに取れるのは採食量(4)だけ。');
+console.log('  80の山は20回ぶんだが、密度0.1個体/セルなので1ステップ平均0.4しか減らない。');
+console.log('  届く範囲を広げると集中の害（半径0と半径3の差）が縮むか\n');
+console.log('  条件            半径0             半径3             差');
+
+const reach: [string, (c: WorldConfig) => void][] = [
+  ['そのまま', () => {}],
+  ['草食の視野2', (c) => (c.species[0].visionRange = 2)],
+  ['草食の速度2', (c) => (c.species[0].speed = 2)],
+  ['草食の速度3', (c) => (c.species[0].speed = 3)],
+  ['採食量8', (c) => (c.species[0].gainFromGrass = 8)],
+  ['採食量20', (c) => (c.species[0].gainFromGrass = 20)],
+];
+
+for (const [label, mod] of reach) {
+  const a = measure(() => {
+    const c = corpse(80, { spread: 0 })();
+    mod(c);
+    return c;
+  });
+  const b = measure(() => {
+    const c = corpse(80, { spread: 3 })();
+    mod(c);
+    return c;
+  });
+  console.log(
+    `  ${label.padEnd(14)} ${a.survived}/8 ${a.mean.toFixed(0).padStart(4)}(${String(a.min).padStart(4)}-${String(a.max).padStart(4)})  ` +
+      `${b.survived}/8 ${b.mean.toFixed(0).padStart(4)}(${String(b.min).padStart(4)}-${String(b.max).padStart(4)})  ` +
+      `${b.survived - a.survived >= 0 ? '+' : ''}${b.survived - a.survived}`,
+  );
+}
+
 done(t0);
