@@ -1,7 +1,7 @@
 import { presetByKey } from '../../../src/core/presets.ts';
 import { World } from '../../../src/core/world.ts';
 import { step } from '../../../src/core/step.ts';
-import { trial, header, done, mark, speedOf } from './_lib.ts';
+import { trial, header, done, mark, speedOf, banner } from './_lib.ts';
 import type { WorldConfig } from '../../../src/core/types.ts';
 
 /**
@@ -14,6 +14,7 @@ import type { WorldConfig } from '../../../src/core/types.ts';
  */
 
 const t0 = performance.now();
+banner();
 const SEEDS_8 = [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000];
 const SEEDS_4 = [1000, 2000, 3000, 4000];
 const SEEDS_3 = [1000, 2000, 3000];
@@ -67,8 +68,8 @@ function build(o: Opts): () => WorldConfig {
   };
 }
 
-function row(label: string, o: Opts, seeds = SEEDS_8, long = true): void {
-  const t = trial(build(o), {
+async function row(label: string, o: Opts, seeds = SEEDS_8, long = true): Promise<void> {
+  const t = await trial(build(o), {
     seeds,
     steps: long ? LONG : SHORT,
     tail: long ? LONG_TAIL : SHORT_TAIL,
@@ -183,9 +184,9 @@ function trace(label: string, o: Opts, steps: number, every: number): void {
 // 代償を外せば上限まで走り去るはず。どちらも外れたら以降の数字は読めない
 // ---------------------------------------------------------------------------
 header('対照: 変異と代償を外す（4シード）');
-row('変異なし 初期1.0', { start: 1, sigma: 0 }, SEEDS_4, false);
-row('変異なし 初期2.5', { start: 2.5, sigma: 0 }, SEEDS_4, false);
-row('速度コスト0 初期1.0', { start: 1, speedCost: 0 }, SEEDS_4, false);
+await row('変異なし 初期1.0', { start: 1, sigma: 0 }, SEEDS_4, false);
+await row('変異なし 初期2.5', { start: 2.5, sigma: 0 }, SEEDS_4, false);
+await row('速度コスト0 初期1.0', { start: 1, speedCost: 0 }, SEEDS_4, false);
 
 // ---------------------------------------------------------------------------
 // 本題。同じ収束先に別々の初期値から辿り着くかどうかを見る。
@@ -193,14 +194,14 @@ row('速度コスト0 初期1.0', { start: 1, speedCost: 0 }, SEEDS_4, false);
 // ---------------------------------------------------------------------------
 header('捕食者あり・視野なし: 初期速度を変えて収束先を見る（8シード・20000ステップ）');
 for (const start of [0.5, 1, 2, 4]) {
-  row(`初期 ${start.toFixed(1)}`, { start });
+  await row(`初期 ${start.toFixed(1)}`, { start });
 }
 
 header('対照: 捕食者を消す（8シード・20000ステップ）');
 // 肉食を0にした行は「肉食が絶滅している」ことになるので生存の記号は 0/8 で出る。
 // ここで見たいのは草食の速度なので、その列は読み飛ばしてよい
 for (const start of [1, 3]) {
-  row(`初期 ${start.toFixed(1)} 肉食なし`, { start, predator: false });
+  await row(`初期 ${start.toFixed(1)} 肉食なし`, { start, predator: false });
 }
 
 header('平均速度の推移（3シード・10000ステップごと）');
@@ -215,8 +216,8 @@ for (const start of [1, 4]) {
 // 速い足の価値は消えるはず
 // ---------------------------------------------------------------------------
 header('草食に視野3を与える（8シード・重い）');
-row('視野3 捕食者あり', { start: 1, vision: 3 }, SEEDS_8, false);
-row('視野3 肉食なし', { start: 1, vision: 3, predator: false }, SEEDS_8, false);
+await row('視野3 捕食者あり', { start: 1, vision: 3 }, SEEDS_8, false);
+await row('視野3 肉食なし', { start: 1, vision: 3, predator: false }, SEEDS_8, false);
 
 header('視野3で上から出発する（3シード・10000ステップごと）');
 trace('初期 3.0 捕食者あり', { start: 3, vision: 3 }, 40000, 10000);
@@ -226,8 +227,8 @@ trace('初期 3.0 捕食者あり', { start: 3, vision: 3 }, 40000, 10000);
 // 代謝を上げれば個体数は下がるが、餌を探す価値も同時に上がるので
 // 切り分けにならない（下の結果を参照）
 header('視野3・肉食なしで代謝を上げて密度を揃える（4シード）');
-row('代謝 0.25（既定）', { start: 1, vision: 3, predator: false }, SEEDS_4, false);
-row('代謝 0.44', { start: 1, vision: 3, predator: false, metabolism: 0.44 }, SEEDS_4, false);
+await row('代謝 0.25（既定）', { start: 1, vision: 3, predator: false }, SEEDS_4, false);
+await row('代謝 0.44', { start: 1, vision: 3, predator: false, metabolism: 0.44 }, SEEDS_4, false);
 
 // ---------------------------------------------------------------------------
 // 捕食圧そのものを振る。
@@ -241,8 +242,8 @@ row('代謝 0.44', { start: 1, vision: 3, predator: false, metabolism: 0.44 }, S
  * 定常状態では、捕食で得るエネルギーが捕食者の代謝と釣り合っている。
  * そこから毎ステップの捕食回数を逆算し、草食1個体あたりの被捕食率にする。
  */
-function pressureRow(label: string, o: Opts, gain: number, seeds = SEEDS_8): void {
-  const t = trial(build(o), { seeds, steps: 15000, tail: 3000 });
+async function pressureRow(label: string, o: Opts, gain: number, seeds = SEEDS_8): Promise<void> {
+  const t = await trial(build(o), { seeds, steps: 15000, tail: 3000 });
   const [herb, pred] = t.species;
 
   if (t.survived === 0) {
@@ -260,17 +261,17 @@ function pressureRow(label: string, o: Opts, gain: number, seeds = SEEDS_8): voi
 
 header('捕獲成功率を振る（8シード）: つまみとして使えるか');
 for (const cr of [0.02, 0.04, 0.08, 0.15]) {
-  pressureRow(`成功率 ${cr.toFixed(2)}`, { start: 1, captureRate: cr }, 18);
+  await pressureRow(`成功率 ${cr.toFixed(2)}`, { start: 1, captureRate: cr }, 18);
 }
 
 header('捕食利得で捕食圧を振る・視野0（8シード）');
 for (const gain of [14, 16, 18, 22, 26, 32]) {
-  pressureRow(`利得 ${gain}`, { start: 1, gainFromPrey: gain }, gain);
+  await pressureRow(`利得 ${gain}`, { start: 1, gainFromPrey: gain }, gain);
 }
 
 header('捕食利得で捕食圧を振る・視野3（8シード・重い）');
 for (const gain of [16, 18, 22, 26, 32]) {
-  pressureRow(`利得 ${gain} 視野3`, { start: 1, vision: 3, gainFromPrey: gain }, gain);
+  await pressureRow(`利得 ${gain} 視野3`, { start: 1, vision: 3, gainFromPrey: gain }, gain);
 }
 
 // 視野3で捕食圧を上げた行はシード間の幅が広い（利得26で 0.77-2.27）。
@@ -292,7 +293,7 @@ for (const seed of [1000, 5000, 7000, 4000]) {
 // ---------------------------------------------------------------------------
 header('比較: 速度を固定した集団の個体数（8シード）');
 for (const v of [1, 1.5, 2, 2.5, 2.75, 3, 3.5]) {
-  row(`固定 ${v.toFixed(2)}`, { start: v, sigma: 0 }, SEEDS_8, false);
+  await row(`固定 ${v.toFixed(2)}`, { start: v, sigma: 0 }, SEEDS_8, false);
 }
 
 // ---------------------------------------------------------------------------
@@ -304,7 +305,7 @@ for (const v of [1, 1.5, 2, 2.5, 2.75, 3, 3.5]) {
 // ---------------------------------------------------------------------------
 header('変異の強さを振る（8シード・10000ステップで打ち切り）');
 for (const sigma of [0.01, 0.02, 0.05, 0.1, 0.2]) {
-  row(`σ=${sigma.toFixed(2)}`, { start: 1, sigma }, SEEDS_8, false);
+  await row(`σ=${sigma.toFixed(2)}`, { start: 1, sigma }, SEEDS_8, false);
 }
 
 header('変異が弱いときの推移（3シード・20000ステップごと）');
@@ -312,4 +313,4 @@ for (const sigma of [0.01, 0.02, 0.05]) {
   trace(`σ=${sigma.toFixed(2)}`, { start: 1, sigma }, 80000, 20000);
 }
 
-done(t0);
+await done(t0);

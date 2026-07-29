@@ -1,7 +1,7 @@
 import { World } from '../../../src/core/world.ts';
 import { step } from '../../../src/core/step.ts';
 import { presetByKey } from '../../../src/core/presets.ts';
-import { trial, header, done, mark } from './_lib.ts';
+import { trial, header, done, mark, banner } from './_lib.ts';
 
 /**
  * レポート04: 代謝を下げると生態系が壊れる
@@ -13,6 +13,7 @@ import { trial, header, done, mark } from './_lib.ts';
  */
 
 const t0 = performance.now();
+banner();
 const SEEDS_8 = [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000];
 const CELLS = 120 * 90;
 const REGROW = 0.06;
@@ -26,7 +27,7 @@ const build = (m: number) => () => {
 header('3シードだと 0.35 だけが不安定に見える（誤り）');
 console.log('  代謝  生存   草食           中位           頂点');
 for (const m of [0.45, 0.4, 0.35, 0.3, 0.25]) {
-  const t = trial(build(m), { seeds: [1000, 2000, 3000], steps: 6000, tail: 3000 });
+  const t = await trial(build(m), { seeds: [1000, 2000, 3000], steps: 6000, tail: 3000 });
   const cols = t.species.map((s) => `${s.mean.toFixed(0).padStart(4)}(max${String(s.max).padStart(5)})`);
   console.log(`  ${m.toFixed(2)}  ${mark(t)}${t.survived}/3  ${cols.join('  ')}`);
 }
@@ -36,7 +37,7 @@ for (const m of [0.45, 0.4, 0.35, 0.3, 0.25]) {
 header('8シードで測ると、単調なのは振れ幅であって生存回数ではない');
 console.log('  代謝  生存    草食の振れ幅     絶滅ステップ      草食の理論上限');
 for (const m of [0.55, 0.5, 0.45, 0.4, 0.35, 0.3, 0.25, 0.2]) {
-  const t = trial(build(m), { seeds: SEEDS_8, steps: 6000, tail: 3000 });
+  const t = await trial(build(m), { seeds: SEEDS_8, steps: 6000, tail: 3000 });
   const h = t.species[0];
   console.log(
     `  ${m.toFixed(2)}  ${mark(t)}${t.survived}/8   ${String(h.min).padStart(4)} - ${String(h.max).padStart(4)}` +
@@ -67,4 +68,4 @@ header('崩壊の経過（代謝0.35・seed1000）');
   }
 }
 
-done(t0);
+await done(t0);

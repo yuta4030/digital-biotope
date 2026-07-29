@@ -1,4 +1,4 @@
-import { runOne } from '../../../src/sweep/sweep.ts';
+import { runMany, closePool, poolSize } from '../../../src/sweep/pool.ts';
 import type { WorldConfig } from '../../../src/core/types.ts';
 
 /** レポートの既定。特に断りがなければこの条件で測っている */
@@ -31,20 +31,25 @@ export interface Trial {
 /**
  * 同じ条件をシードだけ変えて複数回走らせ、まとめる。
  * まぐれで生き残った条件を弾くため、1回では判断しない。
+ *
+ * シードごとの run は互いに独立なのでスレッドに分けて回す。
+ * 結果は直列で回したときと完全に一致する（乱数はシードから引き直すため）。
  */
-export function trial(
+export async function trial(
   build: () => WorldConfig,
   opts: { seeds?: number[]; steps?: number; tail?: number } = {},
-): Trial {
+): Promise<Trial> {
   const seeds = opts.seeds ?? SEEDS;
   const steps = opts.steps ?? STEPS;
   const tail = opts.tail ?? TAIL;
 
-  const rs = seeds.map((seed) => {
-    const cfg = build();
-    cfg.seed = seed;
-    return runOne(cfg, steps, tail);
-  });
+  const rs = await runMany(
+    seeds.map((seed) => {
+      const cfg = build();
+      cfg.seed = seed;
+      return { config: cfg, steps, tail };
+    }),
+  );
 
   return {
     survived: rs.filter((r) => r.survived).length,
@@ -110,7 +115,14 @@ export function header(title: string): void {
   console.log(`\n=== ${title} ===`);
 }
 
-/** 実行時間を表示して終える */
-export function done(t0: number): void {
+/** 実行時間を表示して終える。ワーカーを畳まないとプロセスが終了しない */
+export async function done(t0: number): Promise<void> {
+  await closePool();
   console.log(`\n所要 ${((performance.now() - t0) / 1000).toFixed(0)}秒`);
+}
+
+/** 冒頭に出す。何スレッドで回っているか分からないと所要時間を比べられない */
+export function banner(): void {
+  const n = poolSize();
+  console.log(n > 1 ? `${n}スレッドで実行` : '直列で実行');
 }
