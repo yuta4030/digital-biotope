@@ -112,17 +112,27 @@ export interface SweepRow {
   grassMean: number;
 }
 
-/** 全軸の直積を走査する */
-export function runSweep(
+/** 1条件ぶんの展開結果。configs は repeats 個（シードだけが違う） */
+export interface SweepCombo {
+  values: Record<string, number>;
+  configs: WorldConfig[];
+}
+
+/**
+ * 全軸の直積を、走らせる直前の config の列まで展開する。
+ *
+ * 軸の apply は関数で worker に送れないので、展開はメインスレッドで済ませ、
+ * 並列実行側には確定した config だけを渡す。直列版と並列版がまったく同じ
+ * config を作ることを、この関数を共有することで担保する。
+ */
+export function expandSweep(
   base: WorldConfig,
   axes: SweepAxis[],
   opts: SweepOptions,
-): SweepRow[] {
+): SweepCombo[] {
   const total = axes.reduce((a, ax) => a * ax.values.length, 1);
-  const rows: SweepRow[] = [];
-  let done = 0;
-
   const indices = new Array<number>(axes.length).fill(0);
+  const combos: SweepCombo[] = [];
 
   for (let combo = 0; combo < total; combo++) {
     // combo を各軸の添字に分解する
@@ -133,7 +143,7 @@ export function runSweep(
     }
 
     const values: Record<string, number> = {};
-    const results: RunResult[] = [];
+    const configs: WorldConfig[] = [];
 
     for (let r = 0; r < opts.repeats; r++) {
       const cfg = structuredClone(base);
@@ -143,29 +153,52 @@ export function runSweep(
         values[ax.label] = v;
         ax.apply(cfg, v);
       });
-      results.push(runOne(cfg, opts.steps, opts.tail));
+      configs.push(cfg);
     }
 
-    const nSpecies = results[0].species.length;
-    rows.push({
-      values,
-      survivedCount: results.filter((r) => r.survived).length,
-      repeats: opts.repeats,
-      grassMean: avg(results.map((r) => r.grassMean)),
-      species: Array.from({ length: nSpecies }, (_, i) => ({
-        id: results[0].species[i].id,
-        name: results[0].species[i].name,
-        mean: avg(results.map((r) => r.species[i].mean)),
-        min: Math.min(...results.map((r) => r.species[i].min)),
-        max: Math.max(...results.map((r) => r.species[i].max)),
-      })),
-    });
-
-    done++;
-    opts.onProgress?.(done, total);
+    combos.push({ values, configs });
   }
 
-  return rows;
+  return combos;
+}
+
+/** 同一条件の repeats 回ぶんの結果を1行にまとめる */
+export function aggregateRow(
+  values: Record<string, number>,
+  results: RunResult[],
+): SweepRow {
+  const nSpecies = results[0].species.length;
+  return {
+    values,
+    survivedCount: results.filter((r) => r.survived).length,
+    repeats: results.length,
+    grassMean: avg(results.map((r) => r.grassMean)),
+    species: Array.from({ length: nSpecies }, (_, i) => ({
+      id: results[0].species[i].id,
+      name: results[0].species[i].name,
+      mean: avg(results.map((r) => r.species[i].mean)),
+      min: Math.min(...results.map((r) => r.species[i].min)),
+      max: Math.max(...results.map((r) => r.species[i].max)),
+    })),
+  };
+}
+
+/**
+ * 全軸の直積を走査する（単一スレッド）。
+ * 並列に回すなら sweep/pool.ts の runSweepParallel を使う。
+ */
+export function runSweep(
+  base: WorldConfig,
+  axes: SweepAxis[],
+  opts: SweepOptions,
+): SweepRow[] {
+  const combos = expandSweep(base, axes, opts);
+
+  return combos.map((combo, i) => {
+    const results = combo.configs.map((cfg) => runOne(cfg, opts.steps, opts.tail));
+    opts.onProgress?.(i + 1, combos.length);
+    return aggregateRow(combo.values, results);
+  });
 }
 
 function avg(xs: number[]): number {

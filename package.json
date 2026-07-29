@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "sweep": "node src/sweep/cli.ts",
+    "check-parallel": "node src/sweep/check-parallel.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

@@ -1,11 +1,14 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { defaultConfig } from '../core/presets.ts';
-import { runSweep, toCsv, type SweepAxis } from './sweep.ts';
+import { runSweep, toCsv, type SweepAxis, type SweepRow } from './sweep.ts';
+import { defaultWorkerCount, runSweepParallel } from './pool.ts';
 
 /**
  * パラメータ探索を回して CSV に落とす。
  *
  *   npm run sweep
+ *   npm run sweep -- --serial      直列で回す（並列版との突き合わせ用）
+ *   SWEEP_WORKERS=2 npm run sweep  worker 数を指定する
  *
  * 調べたい軸はここを直接書き換える。UI から回せるようにするより、
  * 軸の定義をコードで書けたほうが自由度が高い。
@@ -28,17 +31,24 @@ const STEPS = 4000;
 const TAIL = 2000;
 const REPEATS = 3;
 
-const t0 = performance.now();
+const serial = process.argv.includes('--serial');
+const workers = serial ? 1 : defaultWorkerCount();
 
-const rows = runSweep(defaultConfig(), axes, {
+const opts = {
   steps: STEPS,
   tail: TAIL,
   repeats: REPEATS,
   baseSeed: 1000,
-  onProgress(done, total) {
+  onProgress(done: number, total: number) {
     process.stdout.write(`\r探索中 ${done}/${total}`);
   },
-});
+};
+
+const t0 = performance.now();
+
+const rows: SweepRow[] = serial
+  ? runSweep(defaultConfig(), axes, opts)
+  : await runSweepParallel(defaultConfig(), axes, { ...opts, workers });
 
 process.stdout.write('\r'.padEnd(30) + '\r');
 
@@ -69,6 +79,7 @@ writeFileSync(out, '﻿' + toCsv(rows), 'utf8');
 const total = rows.length * REPEATS;
 console.log(
   `\n${total} runs × ${STEPS} steps = ${((total * STEPS) / 1000).toFixed(0)}k steps` +
-    ` / ${((performance.now() - t0) / 1000).toFixed(1)}s`,
+    ` / ${((performance.now() - t0) / 1000).toFixed(1)}s` +
+    ` (${serial ? '直列' : `worker ${workers}`})`,
 );
 console.log(`→ ${out}`);
