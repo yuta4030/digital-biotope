@@ -113,6 +113,40 @@ function tracePerSeed(label: string, o: Opts, steps: number, every: number): voi
 }
 
 /**
+ * 集団内の速度の分布を出す。
+ *
+ * 行き先が2つあると分かっても、それが「試行ごとにどちらかを選ぶ」のか
+ * 「1つの集団の中で二型に割れる」のかは平均と標準偏差では区別できない。
+ * 二山になっていれば後者、単峰なら前者。
+ */
+function histogram(label: string, o: Opts, seed: number, steps: number): void {
+  const cfg = build(o)();
+  cfg.seed = seed;
+  const w = new World(cfg);
+  for (let s = 0; s < steps; s++) step(w);
+
+  const mean = new Float64Array(w.defs.length);
+  const sd = new Float64Array(w.defs.length);
+  w.speedStats(mean, sd);
+
+  const BIN = 0.25;
+  const bins = new Int32Array(20);
+  let n = 0;
+  for (let i = 0; i < w.count; i++) {
+    if (w.aSpecies[i] !== 0) continue;
+    bins[Math.min(bins.length - 1, Math.floor(w.aSpeed[i] / BIN))]++;
+    n++;
+  }
+
+  console.log(`  ${label} seed ${seed}: 平均 ${mean[0].toFixed(2)} ± ${sd[0].toFixed(2)}（個体数 ${n}）`);
+  bins.forEach((c, i) => {
+    if (c === 0) return;
+    const bar = '#'.repeat(Math.round((c / n) * 40)) || '.';
+    console.log(`    ${(i * BIN).toFixed(2)}-${((i + 1) * BIN).toFixed(2)}  ${String(c).padStart(4)}  ${bar}`);
+  });
+}
+
+/**
  * 平均速度の時間発展を出す。
  *
  * 後半だけを平均する表では「まだ動いている途中」と「落ち着いた」が
@@ -244,6 +278,13 @@ for (const gain of [16, 18, 22, 26, 32]) {
 // シードごとに並べると2つの行き先に割れている
 header('視野3・利得26でシードごとに並べる（10000ステップごと）');
 tracePerSeed('視野3 利得26', { start: 1, vision: 3, gainFromPrey: 26 }, 40000, 10000);
+
+// 2つの行き先それぞれで集団内の分布を見る。単峰なら試行ごとの分岐、
+// 二山なら1つの集団の中で二型が共存していることになる
+header('分岐した先での集団内の分布（40000ステップ時点）');
+for (const seed of [1000, 5000, 7000, 4000]) {
+  histogram('視野3 利得26', { start: 1, vision: 3, gainFromPrey: 26 }, seed, 40000);
+}
 
 // ---------------------------------------------------------------------------
 // 進化が辿り着いた速度は、集団にとって良い場所なのか。
