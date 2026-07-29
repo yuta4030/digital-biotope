@@ -37,6 +37,8 @@ interface Opts {
   speedCost?: number;
   /** 草食に視野を持たせる。捕食者を見て逃げられるようになる */
   vision?: number;
+  /** 草食の基礎代謝。上げると平衡個体数が下がる */
+  metabolism?: number;
   predator?: boolean;
 }
 
@@ -49,6 +51,7 @@ function build(o: Opts): () => WorldConfig {
     herb.mutation!.speedSigma = o.sigma ?? 0.05;
     if (o.speedCost !== undefined) herb.speedCost = o.speedCost;
     if (o.vision !== undefined) herb.visionRange = o.vision;
+    if (o.metabolism !== undefined) herb.metabolism = o.metabolism;
     if (o.predator === false) pred.initialCount = 0;
 
     return cfg;
@@ -144,6 +147,14 @@ row('視野3 肉食なし', { start: 1, vision: 3, predator: false }, SEEDS_8, f
 header('視野3で上から出発する（3シード・10000ステップごと）');
 trace('初期 3.0 捕食者あり', { start: 3, vision: 3 }, 40000, 10000);
 
+// 視野3では捕食者がいるほうが遅い（0.76 対 0.83）。
+// 捕食者が草食を減らして草の奪い合いが緩んだせいか、を確かめようとした節。
+// 代謝を上げれば個体数は下がるが、餌を探す価値も同時に上がるので
+// 切り分けにならない（下の結果を参照）
+header('視野3・肉食なしで代謝を上げて密度を揃える（4シード）');
+row('代謝 0.25（既定）', { start: 1, vision: 3, predator: false }, SEEDS_4, false);
+row('代謝 0.44', { start: 1, vision: 3, predator: false, metabolism: 0.44 }, SEEDS_4, false);
+
 // ---------------------------------------------------------------------------
 // 進化が辿り着いた速度は、集団にとって良い場所なのか。
 // 速度を固定した集団と個体数を比べる
@@ -154,12 +165,20 @@ for (const v of [1, 1.5, 2, 2.5, 2.75, 3, 3.5]) {
 }
 
 // ---------------------------------------------------------------------------
-// 変異の強さを変えると収束先も動くのか。動くなら「最適点」ではなく
-// 変異と選択の釣り合いを見ていることになる
+// 変異の強さを変えると収束先も動くのか。
+//
+// この表は10000ステップで打ち切っているので、変異が弱い行は
+// 「低い所に落ち着いた」のではなく「まだ着いていない」。
+// 次の節で長く回して確かめる
 // ---------------------------------------------------------------------------
-header('変異の強さを振る（8シード）');
+header('変異の強さを振る（8シード・10000ステップで打ち切り）');
 for (const sigma of [0.01, 0.02, 0.05, 0.1, 0.2]) {
   row(`σ=${sigma.toFixed(2)}`, { start: 1, sigma }, SEEDS_8, false);
+}
+
+header('変異が弱いときの推移（3シード・20000ステップごと）');
+for (const sigma of [0.01, 0.02, 0.05]) {
+  trace(`σ=${sigma.toFixed(2)}`, { start: 1, sigma }, 80000, 20000);
 }
 
 done(t0);
