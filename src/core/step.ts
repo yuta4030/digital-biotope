@@ -144,10 +144,33 @@ function moveAgents(w: World): void {
 }
 
 /**
- * 1個体の移動先を決める。視界を持つなら
- *   捕食者から逃げる → 獲物を追う → 草の多い方へ → ランダム
- * の優先順。
+ * 視界を持つ個体の行き先を決める。戻り値は scanDx/scanDy の使い方：
+ *   1 = その方向へ、-1 = 逆方向へ（逃走）、0 = 何も見えないのでランダム
+ *
+ * 満腹なら  捕食者から逃げる → 獲物を追う → 草の多い方へ
+ * 空腹なら  獲物を追う → 草の多い方へ → 捕食者から逃げる
+ *
+ * 空腹の側でも逃走を最後に残してあるのは、餌が見えないなら逃げた方が得だから。
+ * 「腹が減ったらリスクを取る」であって、自暴自棄になるわけではない。
  */
+function decideDirection(w: World, i: number, si: number, x: number, y: number, r: number): number {
+  const def = w.defs[si];
+  const predators = w.predatorBits[si];
+  const preys = w.preyBits[si];
+
+  // hungerThreshold が 0 なら常に false。既定の構成は下の分岐に入らず、
+  // 乱数の消費列も従来と1つも変わらない
+  const hungry = w.aEnergy[i] < def.hungerThreshold;
+
+  if (!hungry && predators !== 0 && findNearest(w, x, y, predators, r)) return -1;
+  if (preys !== 0 && findNearest(w, x, y, preys, r)) return 1;
+  if (def.eatsGrass && findGrass(w, x, y, r, w.grass[y * w.width + x])) return 1;
+  if (hungry && predators !== 0 && findNearest(w, x, y, predators, r)) return -1;
+
+  return 0;
+}
+
+/** 1個体の移動先を決める */
 function moveOne(w: World, i: number): void {
   const si = w.aSpecies[i];
   const def = w.defs[si];
@@ -159,28 +182,15 @@ function moveOne(w: World, i: number): void {
   const r = def.visionRange;
   let dx = 0;
   let dy = 0;
-  let decided = false;
 
-  if (r > 0) {
-    // 逃走が最優先。捕食者が見えている間は餌を探さない
-    if (w.predatorBits[si] !== 0 && findNearest(w, x, y, w.predatorBits[si], r)) {
-      dx = toward(-scanDx, speed);
-      dy = toward(-scanDy, speed);
-      decided = true;
-    } else if (w.preyBits[si] !== 0 && findNearest(w, x, y, w.preyBits[si], r)) {
-      dx = toward(scanDx, speed);
-      dy = toward(scanDy, speed);
-      decided = true;
-    } else if (def.eatsGrass && findGrass(w, x, y, r, w.grass[y * w.width + x])) {
-      dx = toward(scanDx, speed);
-      dy = toward(scanDy, speed);
-      decided = true;
-    }
-  }
+  const dir = r > 0 ? decideDirection(w, i, si, x, y, r) : 0;
 
-  if (!decided) {
+  if (dir === 0) {
     dx = w.rng.intRange(-speed, speed);
     dy = w.rng.intRange(-speed, speed);
+  } else {
+    dx = toward(dir * scanDx, speed);
+    dy = toward(dir * scanDy, speed);
   }
 
   w.aX[i] = wrap(x + dx, w.width);

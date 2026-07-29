@@ -58,6 +58,9 @@ export function buildControls(container: HTMLElement, config: WorldConfig): void
       () => def.speed, (v) => (def.speed = v), refresh);
     slider(g, '視野', 0, 8, 1, 0,
       () => def.visionRange, (v) => (def.visionRange = v), refresh);
+    // 視野0の種では効かないが、視野は実行中に上げられるので常に出しておく
+    slider(g, '空腹閾値', 0, 40, 1, 0,
+      () => def.hungerThreshold, (v) => (def.hungerThreshold = v));
     slider(g, '初期個体数 *', 0, 2000, 10, 0,
       () => def.initialCount, (v) => (def.initialCount = v));
 
