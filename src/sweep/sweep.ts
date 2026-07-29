@@ -8,6 +8,12 @@ export interface SpeciesResult {
   mean: number;
   min: number;
   max: number;
+  /**
+   * 集計区間での平均移動速度と、集団内のばらつき（標準偏差の平均）。
+   * 速度が遺伝しない種では定義値と0になる。
+   */
+  speedMean: number;
+  speedSd: number;
 }
 
 export interface RunResult {
@@ -32,6 +38,13 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
   const sum = new Float64Array(n);
   const min = new Float64Array(n).fill(Infinity);
   const max = new Float64Array(n).fill(0);
+
+  // 速度の集計。個体がいない種を平均に混ぜないよう、種ごとに標本数を数える
+  const speedMean = new Float64Array(n);
+  const speedSd = new Float64Array(n);
+  const speedMeanSum = new Float64Array(n);
+  const speedSdSum = new Float64Array(n);
+  const speedSamples = new Float64Array(n);
 
   let samples = 0;
   let grassSum = 0;
@@ -62,6 +75,17 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
       }
       samples++;
 
+      // 速度は個体数ぶん舐めるので、遺伝させる種がいるときだけ、しかも間引いて取る
+      if (w.anyMutation && s % 10 === 0) {
+        w.speedStats(speedMean, speedSd);
+        for (let i = 0; i < n; i++) {
+          if (counts[i] === 0) continue;
+          speedMeanSum[i] += speedMean[i];
+          speedSdSum[i] += speedSd[i];
+          speedSamples[i]++;
+        }
+      }
+
       // 草の総量はセル数ぶん舐めるので間引く
       if (s % 50 === 0) {
         let g = 0;
@@ -82,6 +106,8 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
       mean: samples > 0 ? sum[i] / samples : 0,
       min: min[i] === Infinity ? 0 : min[i],
       max: max[i],
+      speedMean: speedSamples[i] > 0 ? speedMeanSum[i] / speedSamples[i] : def.speed,
+      speedSd: speedSamples[i] > 0 ? speedSdSum[i] / speedSamples[i] : 0,
     })),
   };
 }
@@ -158,6 +184,8 @@ export function runSweep(
         mean: avg(results.map((r) => r.species[i].mean)),
         min: Math.min(...results.map((r) => r.species[i].min)),
         max: Math.max(...results.map((r) => r.species[i].max)),
+        speedMean: avg(results.map((r) => r.species[i].speedMean)),
+        speedSd: avg(results.map((r) => r.species[i].speedSd)),
       })),
     });
 
@@ -182,7 +210,12 @@ export function toCsv(rows: SweepRow[]): string {
     'survived',
     'repeats',
     'grass_mean',
-    ...rows[0].species.flatMap((s) => [`${s.name}_mean`, `${s.name}_min`, `${s.name}_max`]),
+    ...rows[0].species.flatMap((s) => [
+      `${s.name}_mean`,
+      `${s.name}_min`,
+      `${s.name}_max`,
+      `${s.name}_speed`,
+    ]),
   ];
 
   const lines = [header.join(',')];
@@ -193,7 +226,12 @@ export function toCsv(rows: SweepRow[]): string {
         row.survivedCount,
         row.repeats,
         row.grassMean.toFixed(1),
-        ...row.species.flatMap((s) => [s.mean.toFixed(1), s.min, s.max]),
+        ...row.species.flatMap((s) => [
+          s.mean.toFixed(1),
+          s.min,
+          s.max,
+          s.speedMean.toFixed(3),
+        ]),
       ].join(','),
     );
   }

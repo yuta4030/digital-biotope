@@ -34,6 +34,20 @@ export class Rng {
     return this.next() < p;
   }
 
+  /**
+   * 平均0・標準偏差1の正規乱数（Box-Muller）。
+   *
+   * この方法は一度に2つ作れるが、片方は捨てている。取っておくと
+   * 「1回の繁殖で next() を2回引く」という対応が崩れ、
+   * 途中経過を追うときに乱数列と出来事が突き合わせられなくなるため。
+   */
+  normal(): number {
+    // next() は 0 を返しうる。log(0) を踏まないよう (0, 1] に寄せる
+    const u = 1 - this.next();
+    const v = this.next();
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+  }
+
   /** Fisher-Yates。配列を破壊的にシャッフルする */
   shuffle(arr: Int32Array, len: number): void {
     for (let i = len - 1; i > 0; i--) {

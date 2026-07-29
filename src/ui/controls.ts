@@ -24,12 +24,14 @@ export function buildControls(container: HTMLElement, config: WorldConfig): void
     const refresh = () => {
       const total = def.metabolism + def.speedCost * def.speed + def.visionCost * def.visionRange;
       const hasCost = def.speedCost > 0 || def.visionCost > 0;
+      // 速度が遺伝する種は個体ごとに実効代謝が違う。ここに出せるのは初期個体の値だけ
+      const head = def.mutation ? '初期個体の実効代謝' : '実効代謝';
       eff.textContent = hasCost
-        ? `実効代謝 ${total.toFixed(2)}` +
+        ? `${head} ${total.toFixed(2)}` +
           `（基礎 ${def.metabolism.toFixed(2)}` +
           ` + 速度 ${(def.speedCost * def.speed).toFixed(2)}` +
           ` + 視野 ${(def.visionCost * def.visionRange).toFixed(2)}）`
-        : `実効代謝 ${total.toFixed(2)}（行動コストなし）`;
+        : `${head} ${total.toFixed(2)}（行動コストなし）`;
     };
 
     slider(g, '代謝', 0, 2, 0.05, 2,
@@ -54,10 +56,17 @@ export function buildControls(container: HTMLElement, config: WorldConfig): void
       () => def.reproduceThreshold, (v) => (def.reproduceThreshold = v));
     slider(g, '繁殖確率', 0, 0.3, 0.005, 3,
       () => def.reproduceProb, (v) => (def.reproduceProb = v));
-    slider(g, '移動速度', 0, 4, 1, 0,
+    // 速度が遺伝する種では、この値は初期個体に配るぶんにしか効かない
+    slider(g, def.mutation ? '移動速度 *' : '移動速度', 0, 4, def.mutation ? 0.1 : 1, def.mutation ? 1 : 0,
       () => def.speed, (v) => (def.speed = v), refresh);
     slider(g, '視野', 0, 8, 1, 0,
       () => def.visionRange, (v) => (def.visionRange = v), refresh);
+
+    if (def.mutation) {
+      const m = def.mutation;
+      slider(g, '変異の強さ', 0, 0.2, 0.005, 3,
+        () => m.speedSigma, (v) => (m.speedSigma = v));
+    }
     slider(g, '初期個体数 *', 0, 2000, 10, 0,
       () => def.initialCount, (v) => (def.initialCount = v));
 

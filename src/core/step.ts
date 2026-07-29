@@ -1,4 +1,5 @@
 import { World } from './world.ts';
+import type { SpeciesDef } from './types.ts';
 
 /**
  * 1ステップ進める。
@@ -114,6 +115,22 @@ function findGrass(w: World, x: number, y: number, r: number, current: number): 
   return ties > 0;
 }
 
+/**
+ * 連続値の速度を、そのステップで実際に動くセル数（整数）に落とす。
+ *
+ * 格子の上では半セル進むことが出来ないので、端数は確率で繰り上げる。
+ * 速度1.4なら10回のうち4回は2セル、6回は1セル動き、平均は1.4セルになる。
+ * 切り捨てにすると 1.0 と 1.9 の個体が全く同じ動きをしてしまい、
+ * 実効代謝だけが違うことになるので、速いほど不利という結果しか出なくなる。
+ *
+ * 端数が無いときは乱数を引かない。変異を使わない構成の結果を変えないため。
+ */
+function stepSpeed(w: World, v: number): number {
+  const base = Math.floor(v);
+  const frac = v - base;
+  return frac > 0 && w.rng.chance(frac) ? base + 1 : base;
+}
+
 /** d の方向へ最大 speed セル進む */
 function toward(d: number, speed: number): number {
   if (d > 0) return d < speed ? d : speed;
@@ -151,7 +168,7 @@ function moveAgents(w: World): void {
 function moveOne(w: World, i: number): void {
   const si = w.aSpecies[i];
   const def = w.defs[si];
-  const speed = def.speed;
+  const speed = stepSpeed(w, w.aSpeed[i]);
   if (speed === 0) return;
 
   const x = w.aX[i];
@@ -245,12 +262,15 @@ function metabolize(w: World): void {
   const cost = w.effMetabolism;
   for (let s = 0; s < w.defs.length; s++) cost[s] = w.effectiveMetabolism(s);
 
+  // 速度が個体ごとに違う構成でだけ、1体ずつ引き直す
+  const mutating = w.anyMutation;
+
   for (let i = 0; i < w.count; i++) {
     if (w.aAlive[i] === 0) continue;
     const si = w.aSpecies[i];
     const def = w.defs[si];
 
-    w.aEnergy[i] -= cost[si];
+    w.aEnergy[i] -= mutating ? w.effectiveMetabolismFor(si, w.aSpeed[i]) : cost[si];
     if (w.aEnergy[i] <= 0) {
       w.aAlive[i] = 0;
       continue;
@@ -260,6 +280,22 @@ function metabolize(w: World): void {
     w.aAge[i] = age;
     if (def.maxAge > 0 && age >= def.maxAge) w.aAlive[i] = 0;
   }
+}
+
+/**
+ * 子が受け継ぐ速度。親の値に正規ノイズを乗せ、指定の範囲に収める。
+ *
+ * 変異を指定していない種はここで乱数を引かない。既存の構成が
+ * この機構を入れる前と同じ乱数列をたどるようにするため。
+ */
+function childSpeed(w: World, def: SpeciesDef, parent: number): number {
+  const m = def.mutation;
+  if (m === undefined) return parent;
+
+  const v = parent + w.rng.normal() * m.speedSigma;
+  if (v < m.speedMin) return m.speedMin;
+  if (v > m.speedMax) return m.speedMax;
+  return v;
 }
 
 function reproduce(w: World): void {
@@ -272,7 +308,7 @@ function reproduce(w: World): void {
     if (!w.rng.chance(def.reproduceProb)) continue;
 
     const childEnergy = w.aEnergy[i] * def.reproduceCost;
-    if (w.spawn(si, w.aX[i], w.aY[i], childEnergy)) {
+    if (w.spawn(si, w.aX[i], w.aY[i], childEnergy, childSpeed(w, def, w.aSpeed[i]))) {
       w.aEnergy[i] -= childEnergy;
     }
   }

@@ -9,7 +9,18 @@ export const TAIL = 4000;
 export interface Trial {
   survived: number;
   total: number;
-  species: { name: string; mean: number; min: number; max: number }[];
+  species: {
+    name: string;
+    mean: number;
+    min: number;
+    max: number;
+    /** シード間で平均した移動速度。速度が遺伝しない種では定義値 */
+    speed: number;
+    /** 集団内のばらつき（各試行の標準偏差をシード間で平均したもの） */
+    speedSd: number;
+    /** シードごとの到達速度。収束したのか散らばったのかを見るため */
+    speedBySeed: number[];
+  }[];
   /** 崩壊した試行の絶滅ステップ */
   extinctAt: number[];
 }
@@ -41,8 +52,19 @@ export function trial(
       mean: rs.reduce((a, r) => a + r.species[i].mean, 0) / seeds.length,
       min: Math.min(...rs.map((r) => r.species[i].min)),
       max: Math.max(...rs.map((r) => r.species[i].max)),
+      speed: rs.reduce((a, r) => a + r.species[i].speedMean, 0) / seeds.length,
+      speedSd: rs.reduce((a, r) => a + r.species[i].speedSd, 0) / seeds.length,
+      speedBySeed: rs.map((r) => r.species[i].speedMean),
     })),
   };
+}
+
+/** 進化した速度を「平均 (最小-最大)」で出す。シード間のばらつきを隠さないため */
+export function speedOf(t: Trial, speciesIdx = 0): string {
+  const s = t.species[speciesIdx];
+  const lo = Math.min(...s.speedBySeed);
+  const hi = Math.max(...s.speedBySeed);
+  return `${s.speed.toFixed(2)} (${lo.toFixed(2)}-${hi.toFixed(2)})`;
 }
 
 /** 生存の記号。全部生き残ったら OK、全滅なら --、まだらなら △ */
