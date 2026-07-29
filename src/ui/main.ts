@@ -125,14 +125,24 @@ const readoutCounts = () => {
   return counts;
 };
 
+// 速度が遺伝する構成では個体数だけ見ても何が起きているか分からないので、
+// 集団の平均速度を読み出しに出す。種は32までなのでこの長さで足りる
+const speedMean = new Float64Array(32);
+const speedSd = new Float64Array(32);
+
 function updateReadout(): void {
   const counts = readoutCounts();
+  if (world.anyMutation) world.speedStats(speedMean, speedSd);
 
   // .readout は flex なので、gap を効かせるため各項目を要素で包む
   const parts = [`<span>step <b>${world.stepCount.toLocaleString()}</b></span>`];
   world.defs.forEach((def, i) => {
+    const evolved =
+      def.mutation !== undefined && counts[i] > 0
+        ? `（速度 ${speedMean[i].toFixed(2)}±${speedSd[i].toFixed(2)}）`
+        : '';
     parts.push(
-      `<span><span style="color:${def.color}">■</span> ${def.name} <b>${counts[i]}</b></span>`,
+      `<span><span style="color:${def.color}">■</span> ${def.name} <b>${counts[i]}</b>${evolved}</span>`,
     );
   });
   parts.push(`<span>${fps.toFixed(0)} fps</span>`);

@@ -30,7 +30,7 @@ const REPEATS = 3;
 
 const t0 = performance.now();
 
-const rows = runSweep(defaultConfig(), axes, {
+const rows = await runSweep(defaultConfig(), axes, {
   steps: STEPS,
   tail: TAIL,
   repeats: REPEATS,

@@ -320,6 +320,52 @@ presets.push({
     ]),
 });
 
+presets.push({
+  key: 'evolution',
+  label: '進化（速度が遺伝する）',
+  description:
+    '草食動物の移動速度が個体ごとに違い、子は親の速度をわずかにずらして受け継ぐ。' +
+    '速いほど実効代謝が上がるので、速度は釣り合う位置に落ち着く。' +
+    '既定では初期速度1から約2.7まで上がるが、肉食の初期個体数を0にしてリセットすると' +
+    '逆に約1.1まで下がる。速い足の価値は捕食圧が生んでいる（README参照）。',
+  build: () =>
+    world([
+      animal({
+        id: 1,
+        name: '草食動物',
+        color: '#5ec8f2',
+        eatsGrass: true,
+        metabolism: 0.25,
+        speedCost: 0.15,
+        gainFromGrass: 4,
+        reproduceThreshold: 20,
+        reproduceProb: 0.08,
+        // 視野を持たせない。捕食者を見て逃げられると速い足の出番が無くなる
+        speed: 1,
+        visionRange: 0,
+        mutation: { speedSigma: 0.05, speedMin: 0, speedMax: 4 },
+        initialCount: 400,
+      }),
+      animal({
+        id: 2,
+        name: '肉食動物',
+        color: '#f2615e',
+        preys: [1],
+        metabolism: 0.2,
+        speedCost: 0.15,
+        visionCost: 0.025,
+        gainFromPrey: 18,
+        captureRate: 0.04,
+        reproduceThreshold: 40,
+        reproduceProb: 0.06,
+        speed: 2,
+        visionRange: 3,
+        initialCount: 40,
+        initialEnergy: 25,
+      }),
+    ]),
+});
+
 export function presetByKey(key: string): Preset {
   const p = presets.find((x) => x.key === key);
   if (!p) throw new Error(`不明なプリセット: ${key}`);

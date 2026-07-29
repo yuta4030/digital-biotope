@@ -1,6 +1,6 @@
 import { presetByKey } from '../../../src/core/presets.ts';
 import { runSweep, toCsv, type SweepAxis } from '../../../src/sweep/sweep.ts';
-import { done } from './_lib.ts';
+import { done, banner } from './_lib.ts';
 
 /**
  * レポート01: 3層の共存域を探す
@@ -25,8 +25,9 @@ const axes: SweepAxis[] = [
 ];
 
 const t0 = performance.now();
+banner();
 
-const rows = runSweep(presetByKey('basic').build(), axes, {
+const rows = await runSweep(presetByKey('basic').build(), axes, {
   steps: 4000,
   tail: 2000,
   repeats: 3,

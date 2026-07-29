@@ -24,7 +24,7 @@ const STEPS = 6000;
 const TAIL = 3000;
 
 /** 04・06 と同じ条件で回す。過去の表とそのまま比べられるようにするため */
-function run(build: () => WorldConfig): Trial {
+async function run(build: () => WorldConfig): Promise<Trial> {
   return trial(build, { seeds: SEEDS8, steps: STEPS, tail: TAIL });
 }
 
@@ -62,11 +62,11 @@ for (const scale of [6, 15, 30]) {
 
 // ---------------------------------------------------------------------------
 header('2. 基本構成（既定の回復速度0.06）');
-show('一様', run(() => presetByKey('basic').build()));
+show('一様', await run(() => presetByKey('basic').build()));
 for (const scale of [6, 15, 30]) {
   show(
     tag(scale, 0.9),
-    run(() => {
+    await run(() => {
       const c = presetByKey('basic').build();
       c.grass.patch = { scale, contrast: 0.9 };
       return c;
@@ -79,7 +79,7 @@ header('3. 豊穣化した基本構成（回復速度0.25）。06 では一様�
 for (const [scale, contrast] of [[0, 0], [6, 0.9], [15, 0.6], [15, 0.9], [30, 0.9]] as const) {
   show(
     tag(scale, contrast),
-    run(() => {
+    await run(() => {
       const c = presetByKey('basic').build();
       c.grass.regrow = 0.25;
       if (contrast > 0) c.grass.patch = { scale, contrast };
@@ -94,7 +94,7 @@ for (const m of [0.45, 0.55, 0.6, 0.65]) {
   for (const [scale, contrast] of [[0, 0], [15, 0.9], [30, 0.9]] as const) {
     show(
       `代謝${m} ${tag(scale, contrast)}`,
-      run(() => {
+      await run(() => {
         const c = presetByKey('fourtier').build();
         c.species[2].metabolism = m;
         if (contrast > 0) c.grass.patch = { scale, contrast };
@@ -226,13 +226,13 @@ function upkeep(visionCost: number, contrast: number, withPredator: boolean) {
 
 console.log('\n  捕食者なし・視野コスト0（05 では 657 対 966 で、目は純粋な足枷だった）');
 for (const contrast of [0, 0.3, 0.6, 0.9]) {
-  show(tag(15, contrast), run(upkeep(0, contrast, false)));
+  show(tag(15, contrast), await run(upkeep(0, contrast, false)));
 }
 
 console.log('\n  捕食者あり。05 の交差点は視野コスト 0.025〜0.030 の間にあった');
 for (const vc of [0.025, 0.045]) {
   for (const contrast of [0, 0.6, 0.9]) {
-    show(`コスト${vc} ${tag(15, contrast)}`, run(upkeep(vc, contrast, true)));
+    show(`コスト${vc} ${tag(15, contrast)}`, await run(upkeep(vc, contrast, true)));
   }
 }
 
@@ -324,4 +324,4 @@ for (const contrast of [0, 0.9]) {
   console.log(`  （豊かなセルは世界の ${((n / w.cells) * 100).toFixed(1)}% を占める）`);
 }
 
-done(t0);
+await done(t0);

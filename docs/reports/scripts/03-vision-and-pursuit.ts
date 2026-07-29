@@ -1,7 +1,7 @@
 import { World } from '../../../src/core/world.ts';
 import { step } from '../../../src/core/step.ts';
 import { presetByKey } from '../../../src/core/presets.ts';
-import { trial, line, header, done } from './_lib.ts';
+import { trial, line, header, done, banner } from './_lib.ts';
 
 /**
  * レポート03: 視野と追跡
@@ -13,6 +13,7 @@ import { trial, line, header, done } from './_lib.ts';
  */
 
 const t0 = performance.now();
+banner();
 const SEEDS_6 = [1000, 2000, 3000, 4000, 5000, 6000];
 
 header('視野の計算コスト（草食のみ・約1000個体）');
@@ -49,21 +50,21 @@ function pursuit(o: {
 
 header('捕獲成功率なし（=1.0）だと共存域が無い');
 for (const cSpeed of [1, 2, 3]) {
-  line(`草食視野2 肉食速度${cSpeed}`, trial(() => pursuit({ hVision: 2, cVision: 3, cSpeed })), {
+  line(`草食視野2 肉食速度${cSpeed}`, await trial(() => pursuit({ hVision: 2, cVision: 3, cSpeed })), {
     range: false,
   });
 }
 
 header('捕獲成功率を下げる（草食視野2 / 肉食 速度2・視野3・利得18）');
 for (const cap of [0.5, 0.25, 0.12, 0.08, 0.05, 0.03]) {
-  line(`成功率${cap}`, trial(() => pursuit({ hVision: 2, cVision: 3, cSpeed: 2, cap })), {
+  line(`成功率${cap}`, await trial(() => pursuit({ hVision: 2, cVision: 3, cSpeed: 2, cap })), {
     range: false,
   });
 }
 
 header('速度差が無いと成功率は効かない（遭遇そのものが起きない）');
 for (const cap of [0.5, 0.12, 0.03]) {
-  line(`速度1 成功率${cap}`, trial(() => pursuit({ hVision: 2, cVision: 3, cSpeed: 1, cap })), {
+  line(`速度1 成功率${cap}`, await trial(() => pursuit({ hVision: 2, cVision: 3, cSpeed: 1, cap })), {
     range: false,
   });
 }
@@ -78,18 +79,18 @@ for (const [cap, gain] of [
 ] as const) {
   line(
     `成功率${cap} 利得${gain}`,
-    trial(() => pursuit({ hVision: 2, cVision: 3, cSpeed: 2, cap, gain }), { seeds: SEEDS_6 }),
+    await trial(() => pursuit({ hVision: 2, cVision: 3, cSpeed: 2, cap, gain }), { seeds: SEEDS_6 }),
   );
 }
 
 // 採用値では壊れない。詳しくは 06-enrichment.ts
 header('採用値では草食の繁殖確率を上げても壊れない');
 for (const rp of [0.08, 0.12, 0.16, 0.2]) {
-  line(`草食の繁殖確率${rp}`, trial(() => {
+  line(`草食の繁殖確率${rp}`, await trial(() => {
     const cfg = pursuit({ hVision: 2, cVision: 3, cSpeed: 2, cap: 0.04 });
     cfg.species[0].reproduceProb = rp;
     return cfg;
   }), { range: false });
 }
 
-done(t0);
+await done(t0);

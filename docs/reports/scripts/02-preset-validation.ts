@@ -1,5 +1,5 @@
 import { presets, presetByKey } from '../../../src/core/presets.ts';
-import { trial, line, header, done, SEEDS } from './_lib.ts';
+import { trial, line, header, done, SEEDS, banner } from './_lib.ts';
 
 /**
  * レポート02: 構成の検証
@@ -11,15 +11,16 @@ import { trial, line, header, done, SEEDS } from './_lib.ts';
  */
 
 const t0 = performance.now();
+banner();
 
 header(`全構成（${SEEDS.length}シード × 8000ステップ）`);
 for (const p of presets) {
-  line(p.label, trial(() => p.build()));
+  line(p.label, await trial(() => p.build()));
 }
 
 header('競合: 捕食者を消すと劣位種はどうなるか');
-line('捕食者あり', trial(() => presetByKey('keystone').build()));
-line('捕食者なし', trial(() => {
+line('捕食者あり', await trial(() => presetByKey('keystone').build()));
+line('捕食者なし', await trial(() => {
   const c = presetByKey('keystone').build();
   c.species[2].initialCount = 0;
   return c;
@@ -27,7 +28,7 @@ line('捕食者なし', trial(() => {
 
 header('雑食: 採食量と代謝(0.7)の大小が分かれ目');
 for (const g of [3, 2, 1.2, 0.8, 0.4]) {
-  line(`採食量=${g}`, trial(() => {
+  line(`採食量=${g}`, await trial(() => {
     const c = presetByKey('omnivore').build();
     c.species[1].gainFromGrass = g;
     return c;
@@ -36,11 +37,11 @@ for (const g of [3, 2, 1.2, 0.8, 0.4]) {
 
 header('4層: 頂点捕食者の代謝とピラミッドの形');
 for (const m of [0.3, 0.45, 0.55, 0.65, 0.75]) {
-  line(`頂点の代謝=${m}`, trial(() => {
+  line(`頂点の代謝=${m}`, await trial(() => {
     const c = presetByKey('fourtier').build();
     c.species[2].metabolism = m;
     return c;
   }), { range: false });
 }
 
-done(t0);
+await done(t0);

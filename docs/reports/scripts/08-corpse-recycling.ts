@@ -26,7 +26,7 @@ const STEPS = 6000;
 const TAIL = 3000;
 
 /** 04・06・07 と同じ条件で回す。過去の表とそのまま比べられるようにするため */
-function run(build: () => WorldConfig): Trial {
+async function run(build: () => WorldConfig): Promise<Trial> {
   return trial(build, { seeds: SEEDS8, steps: STEPS, tail: TAIL });
 }
 
@@ -78,7 +78,7 @@ header('2. 基本構成: 草食動物だけ還元する');
 for (const cg of [0, 4, 16]) {
   show(
     `草食の還元${cg}`,
-    run(() => {
+    await run(() => {
       const c = presetByKey('basic').build();
       c.species[0].corpseGrass = cg;
       return c;
@@ -90,7 +90,7 @@ header('3. 基本構成: 肉食動物を還元する（餓死100%なので全部
 for (const cg of [0, 10, 20, 40, 80]) {
   show(
     `肉食の還元${cg}`,
-    run(() => {
+    await run(() => {
       const c = presetByKey('basic').build();
       c.species[1].corpseGrass = cg;
       return c;
@@ -102,7 +102,7 @@ header('4. 基本構成: 両方還元する');
 for (const cg of [10, 20, 40]) {
   show(
     `両方の還元${cg}`,
-    run(() => {
+    await run(() => {
       const c = presetByKey('basic').build();
       c.species.forEach((s) => (s.corpseGrass = cg));
       return c;
@@ -116,7 +116,7 @@ console.log('  還元を入れずに総入力だけを揃える。差が出れ�
 for (const r of [0.06, 0.09, 0.12, 0.15, 0.18, 0.25]) {
   show(
     `回復速度${r}`,
-    run(() => {
+    await run(() => {
       const c = presetByKey('basic').build();
       c.grass.regrow = r;
       return c;
@@ -131,7 +131,7 @@ for (const m of [0.6, 0.65]) {
   for (const cg of [0, 20, 40]) {
     show(
       `代謝${m} 還元${cg}`,
-      run(() => {
+      await run(() => {
         const c = presetByKey('fourtier').build();
         c.species[2].metabolism = m;
         c.species.forEach((s) => (s.corpseGrass = cg));
@@ -142,7 +142,7 @@ for (const m of [0.6, 0.65]) {
   for (const r of [0.07, 0.08, 0.09]) {
     show(
       `代謝${m} 回復速度${r}`,
-      run(() => {
+      await run(() => {
         const c = presetByKey('fourtier').build();
         c.species[2].metabolism = m;
         c.grass.regrow = r;
@@ -255,4 +255,4 @@ for (const [label, apply] of cases) {
   );
 }
 
-done(t0);
+await done(t0);
