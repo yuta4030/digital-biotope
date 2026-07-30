@@ -87,16 +87,23 @@ header('節2: パッチは揺らぎのつまみにならない');
  */
 {
   const STEPS = 20000;
-  const rows = await Promise.all(
-    [0, 0.2, 0.4, 0.8].map(async (contrast) => {
-      const [t] = await trials([() => cfgOf({ gain: 26, contrast })], {
-        seeds: SEEDS_8,
-        steps: STEPS,
-        tail: 8000,
-      });
-      return { contrast, t };
-    }),
+  const contrasts = [0, 0.2, 0.4, 0.8];
+
+  /**
+   * 4条件を**1回の trials にまとめて渡す**。条件ごとに trials を呼んで
+   * Promise.all で束ねてはいけない。ワーカーを使い回しているので dispatch を
+   * 並行させると結果が取り違えられる（pool.ts の running を参照）。
+   * 最初にその書き方をして、4条件が1ビットも違わない値になった。
+   *
+   * まとめて渡すほうが速くもある。条件×シードの全通りが1つのプールに流れるので、
+   * 8シード / 4スレッドのような端数で待ちが出ない。
+   */
+  const ts = await trials(
+    contrasts.map((contrast) => () => cfgOf({ gain: 26, contrast })),
+    { seeds: SEEDS_8, steps: STEPS, tail: 8000 },
   );
+  const rows = contrasts.map((contrast, i) => ({ contrast, t: ts[i] }));
+
   console.log('  contrast  草食 平均(sd) 変動係数   草の実生産   到達速度');
   for (const { contrast, t } of rows) {
     const h = t.species[0];
