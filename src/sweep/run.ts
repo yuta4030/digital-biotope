@@ -1,5 +1,6 @@
 import { World } from '../core/world.ts';
 import { step } from '../core/step.ts';
+import { Rng } from '../core/rng.ts';
 import type { WorldConfig } from '../core/types.ts';
 
 /**
@@ -66,6 +67,206 @@ export function runTrace(config: WorldConfig, opts: TraceOptions): TraceResult {
     total++;
   }
   return { marks, histogram: { bin, counts: hist, total } };
+}
+
+/**
+ * 侵入の実験の設定。平衡に達した世界へ少数の個体を投入し、定着するかを何度も測る。
+ *
+ * 投入に使う乱数は世界本体とは**別のストリーム**から引く。同じ rng を使うと
+ * 投入した回数だけ消費数がずれて、在来の挙動が「侵入者を入れなかった場合」と
+ * 一致しなくなる。一致していることが、定着率を在来の状態と結びつけて読むための前提。
+ * パッチ場（world.ts の buildPatchField）と同じ理由で同じ手を使っている。
+ */
+export interface InvasionOptions {
+  /** 侵入者の種インデックス。これ以外の種はすべて在来として扱う */
+  invaderIdx: number;
+  /** 在来が平衡に落ち着くまで回すステップ数。ここでの投入はしない */
+  warmup: number;
+  /** 侵入を試す回数 */
+  attempts: number;
+  /** 1回に投入する個体数 */
+  propagule: number;
+  /**
+   * true なら投入個体を同一セルに固める。既定 (false) は無作為なセルへ撒く。
+   *
+   * この模型は無性生殖でつがい探しが無く、草食は視野0で群れの利益も無いので、
+   * 固めることに利点が1つも無い（1セルの草は最大8、採食量4なので2個体で空になる）。
+   * 本編は false で回し、これは 09 の裏返しを1条件だけ確かめるための軸。
+   */
+  clumped: boolean;
+  /** 侵入者がこの個体数に達したら定着とみなす */
+  establishAt: number;
+  /** 1回の試行の打ち切り。定着も絶滅もしないまま超えたら「判定なし」に数える */
+  timeout: number;
+  /**
+   * 定着した侵入者を除去してから次を投入するまでの最短の待ち。
+   * 在来が元の分布に戻ってから次を入れるため。
+   */
+  recovery: number;
+  /**
+   * recovery に足す一様乱数の幅。0 だと投入が等間隔になり、在来の振動と
+   * 同期して常に同じ位相で入れることになりうる（08 で踏んだ周期の罠）。
+   * 谷で入れたかどうかを測りたいので、位相はばらけさせる。
+   */
+  jitter: number;
+}
+
+/**
+ * 1回の投入の結末。
+ *
+ * timeout を失敗に混ぜない。混ぜると「判定できなかった」が「定着しなかった」に化けて、
+ * 閾値や打ち切りが短すぎることに気づけなくなる。
+ */
+export type InvasionOutcome = 'established' | 'lost' | 'timeout';
+
+export interface InvasionAttempt {
+  /** 投入したステップ */
+  step: number;
+  /** 投入した瞬間の在来個体数（種インデックス別）。谷で入れたほうが通るかを見るのに要る */
+  resident: number[];
+  outcome: InvasionOutcome;
+  /** 結末までに掛かったステップ数 */
+  waited: number;
+}
+
+export interface InvasionResult {
+  attempts: InvasionAttempt[];
+  /**
+   * 在来のどれかが絶滅したステップ。-1 なら最後まで保った。
+   *
+   * 崩壊すると在来の個体数分布そのものが変わるので、それ以降の投入は
+   * 別の世界を測ることになる。09 で「崩壊したから変動係数が高い」のを
+   * 「変動係数が高いから崩壊した」と読んだ失敗があるので、崩壊で打ち切る。
+   */
+  collapsedAt: number;
+  /**
+   * warmup 以降の在来個体数（種インデックス別）。揺らぎの大きさを測る側として要る。
+   *
+   * 侵入者がいる区間も含めて毎ステップ取っている。除くと、定着が起きた区間
+   * （= 在来が谷にいた区間）だけが抜けて最小値が上に偏るため。
+   * 侵入者は多くても establishAt 体なので、在来への影響は数%に収まる。
+   */
+  resident: { name: string; mean: number; sd: number; min: number; max: number }[];
+}
+
+/** 侵入者を除く全種が生存しているか */
+function residentsAlive(counts: Int32Array, invaderIdx: number): boolean {
+  for (let i = 0; i < counts.length; i++) {
+    if (i !== invaderIdx && counts[i] === 0) return false;
+  }
+  return true;
+}
+
+export function runInvasion(config: WorldConfig, opts: InvasionOptions): InvasionResult {
+  const w = new World(config);
+  const n = w.defs.length;
+  const inv = opts.invaderIdx;
+  const counts = new Int32Array(n);
+
+  // 世界本体の乱数列を汚さないための別ストリーム。定数は他の派生ストリームと重ならない値
+  const rng = new Rng((config.seed ^ 0x2f6a1c53) >>> 0);
+  const energy = w.defs[inv].initialEnergy;
+
+  const sum = new Float64Array(n);
+  const sqSum = new Float64Array(n);
+  const min = new Float64Array(n).fill(Infinity);
+  const max = new Float64Array(n).fill(0);
+  let samples = 0;
+
+  let collapsedAt = -1;
+  const attempts: InvasionAttempt[] = [];
+
+  /** 1ステップ進めて在来の個体数を集計する。崩壊したら false */
+  const advance = (): boolean => {
+    step(w);
+    w.countBySpecies(counts);
+    for (let i = 0; i < n; i++) {
+      if (i === inv) continue;
+      const c = counts[i];
+      sum[i] += c;
+      sqSum[i] += c * c;
+      if (c < min[i]) min[i] = c;
+      if (c > max[i]) max[i] = c;
+    }
+    samples++;
+    if (collapsedAt < 0 && !residentsAlive(counts, inv)) {
+      collapsedAt = w.stepCount;
+      return false;
+    }
+    return true;
+  };
+
+  // warmup 中は統計を取らない。初期配置から落ち着くまでの過渡状態なので
+  for (let s = 0; s < opts.warmup; s++) {
+    step(w);
+    w.countBySpecies(counts);
+    if (!residentsAlive(counts, inv)) {
+      collapsedAt = w.stepCount;
+      break;
+    }
+  }
+
+  /** 侵入者を全部取り除く。step の末尾と同じ手順なので、間に呼んでも整合する */
+  const cull = (): void => {
+    for (let i = 0; i < w.count; i++) if (w.aSpecies[i] === inv) w.aAlive[i] = 0;
+    w.compact();
+  };
+
+  for (let a = 0; a < opts.attempts && collapsedAt < 0; a++) {
+    w.countBySpecies(counts);
+    const resident = Array.from(counts);
+    resident[inv] = 0;
+
+    if (opts.clumped) {
+      const x = rng.int(w.width);
+      const y = rng.int(w.height);
+      for (let k = 0; k < opts.propagule; k++) w.spawn(inv, x, y, energy);
+    } else {
+      for (let k = 0; k < opts.propagule; k++) {
+        w.spawn(inv, rng.int(w.width), rng.int(w.height), energy);
+      }
+    }
+
+    let outcome: InvasionOutcome = 'timeout';
+    let waited = 0;
+    while (waited < opts.timeout) {
+      if (!advance()) break;
+      waited++;
+      if (counts[inv] === 0) {
+        outcome = 'lost';
+        break;
+      }
+      if (counts[inv] >= opts.establishAt) {
+        outcome = 'established';
+        break;
+      }
+    }
+
+    attempts.push({ step: w.stepCount, resident, outcome, waited });
+    if (collapsedAt >= 0) break;
+
+    // lost なら侵入者はもう0なので何も起きない。timeout の居残りもここで消す
+    if (outcome !== 'lost') cull();
+
+    const gap = opts.recovery + (opts.jitter > 0 ? rng.int(opts.jitter) : 0);
+    for (let g = 0; g < gap; g++) if (!advance()) break;
+  }
+
+  return {
+    attempts,
+    collapsedAt,
+    resident: w.defs.map((def, i) => {
+      const mean = samples > 0 ? sum[i] / samples : 0;
+      const variance = samples > 0 ? sqSum[i] / samples - mean * mean : 0;
+      return {
+        name: def.name,
+        mean,
+        sd: variance > 0 ? Math.sqrt(variance) : 0,
+        min: min[i] === Infinity ? 0 : min[i],
+        max: max[i],
+      };
+    }),
+  };
 }
 
 export interface SpeciesResult {

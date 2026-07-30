@@ -3,9 +3,12 @@ import { availableParallelism } from 'node:os';
 import {
   runOne,
   runTrace,
+  runInvasion,
   type RunResult,
   type TraceOptions,
   type TraceResult,
+  type InvasionOptions,
+  type InvasionResult,
 } from './run.ts';
 import type { WorldConfig } from '../core/types.ts';
 
@@ -36,12 +39,18 @@ export interface TraceJob extends TraceOptions {
   config: WorldConfig;
 }
 
-export type AnyJob = Job | TraceJob;
+/** 平衡に達した世界へ少数を投入して、定着するかを何度も測る */
+export interface InvasionJob extends InvasionOptions {
+  kind: 'invasion';
+  config: WorldConfig;
+}
 
-function execute(job: AnyJob): RunResult | TraceResult {
-  return job.kind === 'trace'
-    ? runTrace(job.config, job)
-    : runOne(job.config, job.steps, job.tail);
+export type AnyJob = Job | TraceJob | InvasionJob;
+
+function execute(job: AnyJob): RunResult | TraceResult | InvasionResult {
+  if (job.kind === 'trace') return runTrace(job.config, job);
+  if (job.kind === 'invasion') return runInvasion(job.config, job);
+  return runOne(job.config, job.steps, job.tail);
 }
 
 /**
@@ -94,10 +103,18 @@ export async function traceMany(
   return dispatch(jobs, onDone) as Promise<TraceResult[]>;
 }
 
+/** 侵入の実験。1本が warmup + 投入回数ぶんの長さになるので並列の効きが大きい */
+export async function invadeMany(
+  jobs: InvasionJob[],
+  onDone?: (finished: number) => void,
+): Promise<InvasionResult[]> {
+  return dispatch(jobs, onDone) as Promise<InvasionResult[]>;
+}
+
 async function dispatch(
   jobs: AnyJob[],
   onDone?: (finished: number) => void,
-): Promise<(RunResult | TraceResult)[]> {
+): Promise<(RunResult | TraceResult | InvasionResult)[]> {
   const n = Math.min(poolSize(), jobs.length);
   let finished = 0;
 
@@ -109,7 +126,7 @@ async function dispatch(
     });
   }
 
-  const results = new Array<RunResult | TraceResult>(jobs.length);
+  const results = new Array<RunResult | TraceResult | InvasionResult>(jobs.length);
   const ws = workers(n);
   let next = 0;
 
@@ -119,7 +136,10 @@ async function dispatch(
     ws.slice(0, n).map(
       (w) =>
         new Promise<void>((resolve, reject) => {
-          const onMessage = (m: { index: number; result: RunResult | TraceResult }) => {
+          const onMessage = (m: {
+            index: number;
+            result: RunResult | TraceResult | InvasionResult;
+          }) => {
             results[m.index] = m.result;
             onDone?.(++finished);
             feed();

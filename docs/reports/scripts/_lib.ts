@@ -1,5 +1,12 @@
-import { runMany, closePool, poolSize, type Job } from '../../../src/sweep/pool.ts';
-import type { RunResult } from '../../../src/sweep/run.ts';
+import {
+  runMany,
+  invadeMany,
+  closePool,
+  poolSize,
+  type Job,
+  type InvasionJob,
+} from '../../../src/sweep/pool.ts';
+import type { RunResult, InvasionOptions, InvasionResult } from '../../../src/sweep/run.ts';
 import type { WorldConfig } from '../../../src/core/types.ts';
 
 /** レポートの既定。特に断りがなければこの条件で測っている */
@@ -159,6 +166,166 @@ export async function group<T>(
     opts,
   );
   items.forEach((it, i) => render(it, ts[i]));
+}
+
+// --- 侵入の実験（レポート12） ---
+
+export interface Invasion {
+  /** 崩壊せずに測り切った走行の数と、崩壊した走行の数 */
+  runs: number;
+  collapsed: number;
+  /** 崩壊しなかった走行で試した投入の数と、その結末の内訳 */
+  attempts: number;
+  established: number;
+  lost: number;
+  /**
+   * 定着も絶滅もしないまま打ち切った回数。
+   * これが無視できない数なら閾値か打ち切りが短すぎるので、rate は読めない
+   */
+  timeout: number;
+  /** 定着率。分母に timeout を含めない（判定できなかったものを失敗に化けさせないため） */
+  rate: number;
+  /** 走行ごとの定着率。平均は割れている集団を1つの数字に潰すので、範囲も出す */
+  rateBySeed: number[];
+  /** 在来個体数。揺らぎの大きさを測る側 */
+  resident: { name: string; mean: number; sd: number; cv: number; min: number; max: number }[];
+  /** 崩壊しなかった走行の全投入。ビン分けに使う */
+  all: { residentRatio: number; established: boolean }[];
+}
+
+/**
+ * 侵入の実験を1条件ぶん回してまとめる。
+ *
+ * **崩壊した走行は丸ごと外す。** 崩壊すると在来の個体数分布そのものが変わるので、
+ * その世界の定着率は測りたかったものではない。09 で「崩壊したから変動係数が高い」を
+ * 「変動係数が高いから崩壊した」と読んだのと同じ形の罠になる。
+ * 崩壊前の投入も一緒に捨てている（何回目で崩壊したかに依存する数を混ぜないため）。
+ */
+export async function invade(
+  build: () => WorldConfig,
+  opts: InvasionOptions & { seeds?: number[] },
+): Promise<Invasion> {
+  const seeds = opts.seeds ?? SEEDS;
+  const jobs: InvasionJob[] = seeds.map((seed) => {
+    const cfg = build();
+    cfg.seed = seed;
+    return { kind: 'invasion', config: cfg, ...opts };
+  });
+
+  const tty = process.stdout.isTTY;
+  const rs = await invadeMany(
+    jobs,
+    tty ? (d) => process.stdout.write(`\r  ${d}/${jobs.length} ...`) : undefined,
+  );
+  if (tty) process.stdout.write('\r'.padEnd(20) + '\r');
+
+  return summarizeInvasion(rs, opts.invaderIdx);
+}
+
+function summarizeInvasion(rs: InvasionResult[], invaderIdx: number): Invasion {
+  const ok = rs.filter((r) => r.collapsedAt < 0);
+  const n = ok.length;
+
+  let attempts = 0;
+  let established = 0;
+  let lost = 0;
+  let timeout = 0;
+  const rateBySeed: number[] = [];
+  const all: { residentRatio: number; established: boolean }[] = [];
+
+  // 在来種の代表は種インデックス0（侵入者と同じ段の在来）。比を取る基準に使う
+  const baseIdx = invaderIdx === 0 ? 1 : 0;
+
+  for (const r of ok) {
+    let e = 0;
+    let l = 0;
+    for (const a of r.attempts) {
+      attempts++;
+      if (a.outcome === 'established') e++;
+      else if (a.outcome === 'lost') l++;
+      else {
+        timeout++;
+        continue;
+      }
+      const mean = r.resident[baseIdx].mean;
+      all.push({
+        residentRatio: mean > 0 ? a.resident[baseIdx] / mean : 0,
+        established: a.outcome === 'established',
+      });
+    }
+    established += e;
+    lost += l;
+    if (e + l > 0) rateBySeed.push(e / (e + l));
+  }
+
+  return {
+    runs: n,
+    collapsed: rs.length - n,
+    attempts,
+    established,
+    lost,
+    timeout,
+    rate: established + lost > 0 ? established / (established + lost) : NaN,
+    rateBySeed,
+    resident:
+      n > 0
+        ? ok[0].resident.map((s, i) => {
+            const mean = ok.reduce((a, r) => a + r.resident[i].mean, 0) / n;
+            const sd = ok.reduce((a, r) => a + r.resident[i].sd, 0) / n;
+            return {
+              name: s.name,
+              mean,
+              sd,
+              cv: mean > 0 ? sd / mean : 0,
+              min: Math.min(...ok.map((r) => r.resident[i].min)),
+              max: Math.max(...ok.map((r) => r.resident[i].max)),
+            };
+          })
+        : [],
+    all,
+  };
+}
+
+/** 定着率を「% (走行ごとの範囲)」で出す。平均だけだと割れている集団を潰す */
+export function rateOf(v: Invasion): string {
+  if (!Number.isFinite(v.rate)) return '— (判定なし)';
+  const pct = (x: number) => `${(x * 100).toFixed(0)}%`;
+  const lo = Math.min(...v.rateBySeed);
+  const hi = Math.max(...v.rateBySeed);
+  return `${pct(v.rate).padStart(4)} (${pct(lo)}-${pct(hi)})`;
+}
+
+export function invasionLine(label: string, v: Invasion): void {
+  const warn = v.timeout > 0 ? ` 打切${v.timeout}` : '';
+  const col = v.collapsed > 0 ? ` 崩壊${v.collapsed}` : '';
+  console.log(
+    `  ${label.padEnd(22)} ${rateOf(v)}  ${String(v.established).padStart(3)}/${String(
+      v.established + v.lost,
+    ).padEnd(4)}${warn}${col}`,
+  );
+}
+
+/**
+ * 投入時の在来個体数で定着率をビン分けする。
+ *
+ * 「谷に落ちた瞬間なら食い込める」を直接見るための集計。走行ごとの平均に対する
+ * 比で束ねるので、平均の違う世界どうしでも並べられる。
+ */
+export function byResidentBin(v: Invasion, edges: number[]): void {
+  const bins = edges.map(() => ({ n: 0, e: 0 }));
+  for (const a of v.all) {
+    let b = 0;
+    while (b < edges.length - 1 && a.residentRatio >= edges[b + 1]) b++;
+    bins[b].n++;
+    if (a.established) bins[b].e++;
+  }
+  bins.forEach((b, i) => {
+    const hi = i < edges.length - 1 ? edges[i + 1].toFixed(2) : '∞';
+    const rate = b.n > 0 ? `${((b.e / b.n) * 100).toFixed(0)}%` : '—';
+    console.log(
+      `  在来 ${edges[i].toFixed(2)}〜${hi.padEnd(4)} ${rate.padStart(4)}  ${b.e}/${b.n}`,
+    );
+  });
 }
 
 /** 生存の記号。全部生き残ったら OK、全滅なら --、まだらなら △ */
