@@ -6,6 +6,9 @@ import {
   invasionLine,
   byResidentBin,
   byBin,
+  crossTab,
+  followLine,
+  followCurve,
   header,
   done,
   banner,
@@ -74,22 +77,33 @@ function cfgBasic(): WorldConfig {
 const INV = 1; // 侵入者の種インデックス
 
 /**
- * 校正用の既定。
+ * 段A の既定。閾値に達したら即除去して、次を投入する。
  *
  * timeout は最初600で試したが、定着した試行に525ステップ掛かる例が出たので上げた。
  * 打ち切りが定着の手前に掛かると、遅い定着が失敗に化ける。
  * 打ち切り回数は毎回表示して、無視できる数であることを確認する。
+ *
+ * シードを8から16に増やしてある。最初の8シード×120回では、
+ * 「揺らぎが選択を薄めるか」（谷と山で不利さの効き方が違うか）の交互作用が
+ * 1.0pp ± 3pp で判定できなかった。標本を4倍にすれば ±0.7pp まで下がる。
  */
+const SEEDS_16 = [
+  1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 11000, 12000, 13000, 14000, 15000,
+  16000,
+];
+
 const BASE = {
   invaderIdx: INV,
   warmup: 2000,
-  attempts: 120,
+  attempts: 250,
   propagule: 1,
   clumped: false,
   establishAt: 30,
   timeout: 1500,
   recovery: 300,
   jitter: 300,
+  followUp: 0,
+  followEvery: 1000,
 };
 
 // ---------------------------------------------------------------------------
@@ -149,7 +163,7 @@ const calib: { label: string; met: number }[] = [
 
 const results: Invasion[] = [];
 for (const c of calib) {
-  const v = await invade(() => cfgOf(c.met), { ...BASE, seeds: SEEDS_8 });
+  const v = await invade(() => cfgOf(c.met), { ...BASE, seeds: SEEDS_16 });
   invasionLine(c.label, v);
   results.push(v);
 }
@@ -203,5 +217,63 @@ byBin(results[2], '草/頭', (a) => a.grassRatio / a.ratio[0], [0, 0.75, 1.0, 1.
 
 console.log('\n  [捕食者の個体数]');
 byBin(results[2], '捕食', (a) => a.ratio[2], BINS);
+
+// ---------------------------------------------------------------------------
+header('在来を固定したとき、草の総量はまだ効くか（有利 0.57）');
+
+/**
+ * 在来個体数と1個体あたりの草は、草の総量がほぼ一定なので実質同じ量になっている
+ * （草/頭 ≒ 定数 ÷ 在来）。同じ数字を逆さにして2回測っても切り分けにならない。
+ *
+ * 在来のビンを固定すると、その中でも草の総量は散らばっている。そこで効くなら
+ * 餌の量が効いていて、平らなら在来個体数そのもの（＝取り合う相手の数）が効いている。
+ */
+crossTab(
+  results[2],
+  '在来＼草',
+  (a) => a.ratio[0],
+  [0, 0.75, 1.25],
+  (a) => a.grassRatio,
+  [0, 0.9, 1.1],
+);
+
+// ---------------------------------------------------------------------------
+header('段B: 30体に達した系統は居座るのか');
+
+/**
+ * 閾値到達は「定着」ではなく「30体に達した」でしかない。中立の侵入者が10%も
+ * 通っているのは閾値が甘い疑いがある（中立な系統が k 体に達する確率は概ね 1/k
+ * なので、680体の系で30体なら3%程度が目安）。
+ *
+ * 段Aと分けるのは、本当に定着した侵入者は在来を置き換えてしまうため。
+ * 置き換わった後の世界へ投入を続けても、測りたかった世界ではない。
+ * そこで最初の定着で投入を打ち切り、その系統だけを追う。
+ *
+ * 走行あたり1系統しか取れないので、シードを増やして数を稼ぐ。定着率が約10%なら
+ * 120回の投入でほぼ確実に1回は起きる（起きない確率は 0.9^120 ≈ 3e-6）。
+ */
+const SEEDS_40 = Array.from({ length: 40 }, (_, i) => 1000 * (i + 1));
+/**
+ * 刻みを250にしたのは、消えるのが最初の数百ステップに集中しているため。
+ * 試しに3走行だけ回したとき、30体に達した3系統のうち2つが131・88ステップで消えた。
+ * 1000刻みだとその2つは最初のマークにすら届かず、曲線が出発点から折れて見える。
+ */
+const FOLLOW = {
+  ...BASE,
+  attempts: 120,
+  followUp: 10000,
+  followEvery: 250,
+};
+const SHOW = [250, 500, 1000, 2000, 5000, 10000];
+
+const followed: Invasion[] = [];
+for (const c of calib) {
+  const v = await invade(() => cfgOf(c.met), { ...FOLLOW, seeds: SEEDS_40 });
+  followLine(c.label, v);
+  followed.push(v);
+}
+
+console.log('\n  まだ侵入者が生きている系統の割合（置換で終わった系統も生存に数える）');
+for (let i = 0; i < calib.length; i++) followCurve(calib[i].label, followed[i], SHOW);
 
 await done(t0);

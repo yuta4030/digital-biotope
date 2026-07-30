@@ -202,6 +202,21 @@ export interface Invasion {
     grassRatio: number;
     established: boolean;
   }[];
+  /**
+   * 段Bの追跡のまとめ。followUp > 0 のときだけ中身が入る。
+   *
+   * **閾値到達は「定着」ではなく「30体に達した」でしかない。**
+   * そこから居座るのか消えるのか、在来を置き換えるのかを分けて数える。
+   */
+  follow: {
+    /** 追跡した系統の数（= 定着に到達した走行の数） */
+    n: number;
+    survived: number;
+    lost: number;
+    replaced: number;
+    /** 刻みごとに、まだ侵入者が生きている系統の割合 */
+    alive: { offset: number; frac: number; n: number }[];
+  };
 }
 
 /**
@@ -217,6 +232,7 @@ export async function invade(
   opts: InvasionOptions & { seeds?: number[] },
 ): Promise<Invasion> {
   const seeds = opts.seeds ?? SEEDS;
+  const { followUp, followEvery } = opts;
   const jobs: InvasionJob[] = seeds.map((seed) => {
     const cfg = build();
     cfg.seed = seed;
@@ -230,10 +246,14 @@ export async function invade(
   );
   if (tty) process.stdout.write('\r'.padEnd(20) + '\r');
 
-  return summarizeInvasion(rs);
+  return summarizeInvasion(rs, followUp, followEvery);
 }
 
-function summarizeInvasion(rs: InvasionResult[]): Invasion {
+function summarizeInvasion(
+  rs: InvasionResult[],
+  followUp: number,
+  followEvery: number,
+): Invasion {
   const ok = rs.filter((r) => r.collapsedAt < 0);
   const n = ok.length;
 
@@ -294,7 +314,112 @@ function summarizeInvasion(rs: InvasionResult[]): Invasion {
           })
         : [],
     all,
+    follow: summarizeFollow(ok, followUp, followEvery),
   };
+}
+
+/**
+ * 段Bの追跡をまとめる。
+ *
+ * 生存の判定は end と追跡長から出す。マークの有無で数えてはいけない：
+ * 置き換え（replaced）で終わった系統はそこで記録が止まるが、**侵入者は生きている**。
+ * マークが無いことを消えたことと読むと、いちばん成功した系統を失敗に数える。
+ *
+ * 刻みは設定から作る。実際に付いたマークから作ると、全系統が最初の刻みより前に
+ * 消えた条件で曲線が空になり、「消えた」ではなく「測っていない」に見える。
+ */
+function summarizeFollow(
+  ok: InvasionResult[],
+  followUp: number,
+  followEvery: number,
+): Invasion['follow'] {
+  const fs = ok.map((r) => r.follow).filter((f): f is NonNullable<typeof f> => f !== undefined);
+  const offsets: number[] = [];
+  for (let o = followEvery; o <= followUp; o += followEvery) offsets.push(o);
+
+  return {
+    n: fs.length,
+    survived: fs.filter((f) => f.end === 'survived').length,
+    lost: fs.filter((f) => f.end === 'lost').length,
+    replaced: fs.filter((f) => f.end === 'replaced').length,
+    alive: offsets.map((offset) => {
+      const alive = fs.filter((f) => !(f.end === 'lost' && offset >= f.followed)).length;
+      return { offset, frac: fs.length > 0 ? alive / fs.length : 0, n: fs.length };
+    }),
+  };
+}
+
+export function followLine(label: string, v: Invasion): void {
+  const f = v.follow;
+  if (f.n === 0) {
+    console.log(`  ${label.padEnd(22)} 追跡なし`);
+    return;
+  }
+  const pct = (x: number) => `${((x / f.n) * 100).toFixed(0)}%`;
+  console.log(
+    `  ${label.padEnd(22)} ${String(f.n).padStart(3)}系統  ` +
+      `居座り ${pct(f.survived).padStart(4)}  ` +
+      `置換 ${pct(f.replaced).padStart(4)}  ` +
+      `消滅 ${pct(f.lost).padStart(4)}`,
+  );
+}
+
+/**
+ * 追跡の刻みごとに、まだ生きている系統の割合。
+ * 見せる刻みを絞れるようにしてある（消えるのは最初の数百ステップに集中するので、
+ * そこだけ細かく、あとは粗く並べたい）
+ */
+export function followCurve(label: string, v: Invasion, show?: number[]): void {
+  const pick = show
+    ? show.map((o) => v.follow.alive.find((a) => a.offset === o)).filter((a) => a !== undefined)
+    : v.follow.alive;
+  const cells = pick
+    .map((a) => `+${a!.offset}: ${Math.round(a!.frac * 100).toString().padStart(3)}%`)
+    .join('  ');
+  console.log(`  ${label.padEnd(22)} ${cells}`);
+}
+
+/**
+ * 2つの軸でクロス集計する。片方を固定したときにもう片方が効くかを見る。
+ *
+ * 在来個体数と1個体あたりの草は、草の総量がほぼ一定なので実質同じ量になる
+ * （草/頭 ≒ 定数 ÷ 在来）。同じ数字を逆さにして2回測っても切り分けにならないので、
+ * 在来のビンを固定した中で草の総量が効くかを見る。
+ */
+export function crossTab(
+  v: Invasion,
+  rowLabel: string,
+  rowSel: (a: Invasion['all'][number]) => number,
+  rowEdges: number[],
+  colSel: (a: Invasion['all'][number]) => number,
+  colEdges: number[],
+): void {
+  const idx = (x: number, edges: number[]) => {
+    let b = 0;
+    while (b < edges.length - 1 && x >= edges[b + 1]) b++;
+    return b;
+  };
+  const grid = rowEdges.map(() => colEdges.map(() => ({ n: 0, e: 0 })));
+  for (const a of v.all) {
+    const cell = grid[idx(rowSel(a), rowEdges)][idx(colSel(a), colEdges)];
+    cell.n++;
+    if (a.established) cell.e++;
+  }
+
+  const head = colEdges
+    .map((lo, j) => `${lo.toFixed(2)}〜${j < colEdges.length - 1 ? colEdges[j + 1].toFixed(2) : '∞'}`)
+    .map((s) => s.padStart(12))
+    .join('');
+  console.log(`  ${rowLabel.padEnd(12)}${head}`);
+  grid.forEach((row, i) => {
+    const lo = rowEdges[i].toFixed(2);
+    const hi = i < rowEdges.length - 1 ? rowEdges[i + 1].toFixed(2) : '∞';
+    const cells = row
+      .map((c) => (c.n > 0 ? `${((c.e / c.n) * 100).toFixed(0)}% ${c.e}/${c.n}` : '—'))
+      .map((s) => s.padStart(12))
+      .join('');
+    console.log(`  ${`${lo}〜${hi}`.padEnd(12)}${cells}`);
+  });
 }
 
 /** 定着率を「% (走行ごとの範囲)」で出す。平均だけだと割れている集団を潰す */

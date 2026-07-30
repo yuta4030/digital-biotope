@@ -109,6 +109,38 @@ export interface InvasionOptions {
    * 谷で入れたかどうかを測りたいので、位相はばらけさせる。
    */
   jitter: number;
+  /**
+   * 定着した系統を追い続けるステップ数。0 なら到達時点で除去する（段A）。
+   *
+   * 1以上にすると**最初の定着でその走行の投入を打ち切り**、その系統を追う（段B）。
+   * 打ち切るのは、本当に定着した侵入者は在来を置き換えてしまうため。
+   * 置き換わった後の世界へ投入を続けても、測りたかった世界ではない。
+   *
+   * 段Aと分けたのは、閾値30への到達は「定着」ではなく「30体に達した」でしかなく、
+   * そこから居座るかどうかは別に測らないと分からないため。
+   */
+  followUp: number;
+  /** 追跡中に個体数を記録する刻み */
+  followEvery: number;
+}
+
+/** 追跡の終わり方 */
+export type FollowEnd =
+  /** 追跡しきっても侵入者と在来が両方いる */
+  | 'survived'
+  /** 侵入者が消えた。30体に達しても居座るとは限らない */
+  | 'lost'
+  /** 在来のどれかが絶滅した。侵入者が置き換えた */
+  | 'replaced';
+
+export interface FollowResult {
+  /** 定着（閾値到達）したステップ */
+  from: number;
+  /** followEvery ごとの個体数（種インデックス別） */
+  marks: { offset: number; counts: number[] }[];
+  end: FollowEnd;
+  /** 追跡した長さ */
+  followed: number;
 }
 
 /**
@@ -164,6 +196,53 @@ export interface InvasionResult {
    * セル数ぶん舐めるので runOne と同じく間引いて取る
    */
   grassMean: number;
+  /**
+   * 段Bの追跡。followUp > 0 で、実際に定着が起きた走行にだけ入る。
+   *
+   * 追跡中は在来の統計を取らない。侵入者が数百体まで増えるので、
+   * その区間の在来個体数は「侵入者を入れなかった世界」の値ではなくなる。
+   */
+  follow?: FollowResult;
+}
+
+/**
+ * 閾値に達した系統を追う。段Bの中身。
+ *
+ * ここでは在来の絶滅を「崩壊」として扱わない。**それは侵入者が置き換えたという
+ * 結果そのもの**であって、測定を捨てる理由ではないため。段Aで崩壊を外すのは
+ * 「投入と無関係に壊れた世界の定着率は測りたいものではない」という理由なので、
+ * 置き換えとは別の話になる。
+ */
+function followLineage(
+  w: World,
+  counts: Int32Array,
+  inv: number,
+  opts: InvasionOptions,
+): FollowResult {
+  const from = w.stepCount;
+  const marks: { offset: number; counts: number[] }[] = [];
+  let end: FollowEnd = 'survived';
+  let followed = 0;
+
+  while (followed < opts.followUp) {
+    step(w);
+    w.countBySpecies(counts);
+    followed++;
+
+    if (followed % opts.followEvery === 0) {
+      marks.push({ offset: followed, counts: Array.from(counts) });
+    }
+    if (counts[inv] === 0) {
+      end = 'lost';
+      break;
+    }
+    if (!residentsAlive(counts, inv)) {
+      end = 'replaced';
+      break;
+    }
+  }
+
+  return { from, marks, end, followed };
 }
 
 /** 侵入者を除く全種が生存しているか */
@@ -193,6 +272,7 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
   let grassSamples = 0;
 
   let collapsedAt = -1;
+  let follow: FollowResult | undefined;
   const attempts: InvasionAttempt[] = [];
 
   const totalGrass = (): number => {
@@ -276,6 +356,12 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
     attempts.push({ step: w.stepCount, resident, grass: grassAt, outcome, waited });
     if (collapsedAt >= 0) break;
 
+    // 段B: 最初の定着でこの走行の投入は終わり。あとはその系統を追う
+    if (outcome === 'established' && opts.followUp > 0) {
+      follow = followLineage(w, counts, inv, opts);
+      break;
+    }
+
     // lost なら侵入者はもう0なので何も起きない。timeout の居残りもここで消す
     if (outcome !== 'lost') cull();
 
@@ -286,6 +372,7 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
   return {
     attempts,
     collapsedAt,
+    follow,
     grassMean: grassSamples > 0 ? grassSum / grassSamples : 0,
     resident: w.defs.map((def, i) => {
       const mean = samples > 0 ? sum[i] / samples : 0;
