@@ -189,8 +189,19 @@ export interface Invasion {
   rateBySeed: number[];
   /** 在来個体数。揺らぎの大きさを測る側 */
   resident: { name: string; mean: number; sd: number; cv: number; min: number; max: number }[];
-  /** 崩壊しなかった走行の全投入。ビン分けに使う */
-  all: { residentRatio: number; established: boolean }[];
+  /**
+   * 崩壊しなかった走行の全投入。ビン分けに使う。
+   *
+   * 投入時の値は**その走行の平均に対する比**に直してある。走行やシードで平均が
+   * 違うので、生の個体数で束ねると平均の違いをビンの違いとして読むことになる。
+   */
+  all: {
+    /** 種インデックス別の個体数の比。侵入者の位置は常に0 */
+    ratio: number[];
+    /** 草の総量の比 */
+    grassRatio: number;
+    established: boolean;
+  }[];
 }
 
 /**
@@ -219,10 +230,10 @@ export async function invade(
   );
   if (tty) process.stdout.write('\r'.padEnd(20) + '\r');
 
-  return summarizeInvasion(rs, opts.invaderIdx);
+  return summarizeInvasion(rs);
 }
 
-function summarizeInvasion(rs: InvasionResult[], invaderIdx: number): Invasion {
+function summarizeInvasion(rs: InvasionResult[]): Invasion {
   const ok = rs.filter((r) => r.collapsedAt < 0);
   const n = ok.length;
 
@@ -231,10 +242,7 @@ function summarizeInvasion(rs: InvasionResult[], invaderIdx: number): Invasion {
   let lost = 0;
   let timeout = 0;
   const rateBySeed: number[] = [];
-  const all: { residentRatio: number; established: boolean }[] = [];
-
-  // 在来種の代表は種インデックス0（侵入者と同じ段の在来）。比を取る基準に使う
-  const baseIdx = invaderIdx === 0 ? 1 : 0;
+  const all: Invasion['all'] = [];
 
   for (const r of ok) {
     let e = 0;
@@ -247,9 +255,12 @@ function summarizeInvasion(rs: InvasionResult[], invaderIdx: number): Invasion {
         timeout++;
         continue;
       }
-      const mean = r.resident[baseIdx].mean;
       all.push({
-        residentRatio: mean > 0 ? a.resident[baseIdx] / mean : 0,
+        ratio: a.resident.map((c, i) => {
+          const mean = r.resident[i].mean;
+          return mean > 0 ? c / mean : 0;
+        }),
+        grassRatio: r.grassMean > 0 ? a.grass / r.grassMean : 0,
         established: a.outcome === 'established',
       });
     }
@@ -306,16 +317,24 @@ export function invasionLine(label: string, v: Invasion): void {
 }
 
 /**
- * 投入時の在来個体数で定着率をビン分けする。
+ * 投入時の状態で定着率をビン分けする。selector が比を返す。
  *
- * 「谷に落ちた瞬間なら食い込める」を直接見るための集計。走行ごとの平均に対する
- * 比で束ねるので、平均の違う世界どうしでも並べられる。
+ * 「谷に落ちた瞬間なら食い込める」を直接見るための集計。ただし在来が谷にいる時期は
+ * 同時に「1個体あたりの草が多い」時期でもあり、捕食者の位相もずれている。
+ * どの量で束ねても同じ形が出るなら、在来個体数はただの代弁者ということになる。
+ * だから軸を選べる形にしてある。
  */
-export function byResidentBin(v: Invasion, edges: number[]): void {
+export function byBin(
+  v: Invasion,
+  label: string,
+  selector: (a: Invasion['all'][number]) => number,
+  edges: number[],
+): void {
   const bins = edges.map(() => ({ n: 0, e: 0 }));
   for (const a of v.all) {
+    const x = selector(a);
     let b = 0;
-    while (b < edges.length - 1 && a.residentRatio >= edges[b + 1]) b++;
+    while (b < edges.length - 1 && x >= edges[b + 1]) b++;
     bins[b].n++;
     if (a.established) bins[b].e++;
   }
@@ -323,9 +342,15 @@ export function byResidentBin(v: Invasion, edges: number[]): void {
     const hi = i < edges.length - 1 ? edges[i + 1].toFixed(2) : '∞';
     const rate = b.n > 0 ? `${((b.e / b.n) * 100).toFixed(0)}%` : '—';
     console.log(
-      `  在来 ${edges[i].toFixed(2)}〜${hi.padEnd(4)} ${rate.padStart(4)}  ${b.e}/${b.n}`,
+      `  ${label} ${edges[i].toFixed(2)}〜${hi.padEnd(4)} ${rate.padStart(4)}  ` +
+        `${String(b.e).padStart(3)}/${b.n}`,
     );
   });
+}
+
+/** 投入時の在来個体数でビン分けする。speciesIdx は在来種の位置 */
+export function byResidentBin(v: Invasion, edges: number[], speciesIdx = 0): void {
+  byBin(v, '在来', (a) => a.ratio[speciesIdx], edges);
 }
 
 /** 生存の記号。全部生き残ったら OK、全滅なら --、まだらなら △ */

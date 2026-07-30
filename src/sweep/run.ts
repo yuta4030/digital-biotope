@@ -122,8 +122,20 @@ export type InvasionOutcome = 'established' | 'lost' | 'timeout';
 export interface InvasionAttempt {
   /** 投入したステップ */
   step: number;
-  /** 投入した瞬間の在来個体数（種インデックス別）。谷で入れたほうが通るかを見るのに要る */
+  /**
+   * 投入した瞬間の個体数（種インデックス別、侵入者は0）。
+   *
+   * 在来だけでなく捕食者も入れてある。捕食者は在来と位相がずれるので、
+   * 「在来が谷」は同時に「捕食圧が高い」を意味しうる。分けて数えないと
+   * どちらが効いているか言えない（08 で踏んだ交絡と同じ形）。
+   */
   resident: number[];
+  /**
+   * 投入した瞬間の草の総量。在来が少ない時期は1個体あたりの草が多いので、
+   * 谷の効果が「侵入の機会」ではなく単なる密度依存かもしれない。
+   * その切り分けに要る量なので、代弁させずに直接測る。
+   */
+  grass: number;
   outcome: InvasionOutcome;
   /** 結末までに掛かったステップ数 */
   waited: number;
@@ -147,6 +159,11 @@ export interface InvasionResult {
    * 侵入者は多くても establishAt 体なので、在来への影響は数%に収まる。
    */
   resident: { name: string; mean: number; sd: number; min: number; max: number }[];
+  /**
+   * warmup 以降の草の総量の平均。attempt.grass を比に直す基準に使う。
+   * セル数ぶん舐めるので runOne と同じく間引いて取る
+   */
+  grassMean: number;
 }
 
 /** 侵入者を除く全種が生存しているか */
@@ -172,9 +189,17 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
   const min = new Float64Array(n).fill(Infinity);
   const max = new Float64Array(n).fill(0);
   let samples = 0;
+  let grassSum = 0;
+  let grassSamples = 0;
 
   let collapsedAt = -1;
   const attempts: InvasionAttempt[] = [];
+
+  const totalGrass = (): number => {
+    let g = 0;
+    for (let c = 0; c < w.cells; c++) g += w.grass[c];
+    return g;
+  };
 
   /** 1ステップ進めて在来の個体数を集計する。崩壊したら false */
   const advance = (): boolean => {
@@ -189,6 +214,11 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
       if (c > max[i]) max[i] = c;
     }
     samples++;
+    // 草はセル数ぶん舐めるので間引く。runOne と同じ刻み
+    if (samples % 50 === 0) {
+      grassSum += totalGrass();
+      grassSamples++;
+    }
     if (collapsedAt < 0 && !residentsAlive(counts, inv)) {
       collapsedAt = w.stepCount;
       return false;
@@ -216,6 +246,7 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
     w.countBySpecies(counts);
     const resident = Array.from(counts);
     resident[inv] = 0;
+    const grassAt = totalGrass();
 
     if (opts.clumped) {
       const x = rng.int(w.width);
@@ -242,7 +273,7 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
       }
     }
 
-    attempts.push({ step: w.stepCount, resident, outcome, waited });
+    attempts.push({ step: w.stepCount, resident, grass: grassAt, outcome, waited });
     if (collapsedAt >= 0) break;
 
     // lost なら侵入者はもう0なので何も起きない。timeout の居残りもここで消す
@@ -255,6 +286,7 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
   return {
     attempts,
     collapsedAt,
+    grassMean: grassSamples > 0 ? grassSum / grassSamples : 0,
     resident: w.defs.map((def, i) => {
       const mean = samples > 0 ? sum[i] / samples : 0;
       const variance = samples > 0 ? sqSum[i] / samples - mean * mean : 0;
