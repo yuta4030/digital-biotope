@@ -137,6 +137,15 @@ interface Run {
   gain: number;
   /** 種インデックス0（草食）の平均速度の推移 */
   speed: number[];
+  /**
+   * 集団内の速度のばらつき（標準偏差）の推移。
+   *
+   * 10 が分布を測ったのは40000ステップ時点だけで、**遷移の最中は誰も見ていない**。
+   * 集団まるごとが滑るならここは 0.15 前後のまま動かない。一時的に速い群と遅い群に
+   * 割れるなら跳ね上がる。後者なら「移行期に限って二型が共存する」ことになり、
+   * 戻った往復は「共存を維持できずに戻った」という別の話になる。
+   */
+  speedSd: number[];
   /** 草食の個体数の推移 */
   pop: number[];
   /**
@@ -173,13 +182,14 @@ function departureAt(speed: number[], deadAt: number, threshold: number): number
 
 function analyze(seed: number, gain: number, r: TraceResult): Run {
   const speed = r.marks.map((m) => m.speedMean[0]);
+  const speedSd = r.marks.map((m) => m.speedSd[0]);
   const pop = r.marks.map((m) => m.population[0]);
   const pred = r.marks.map((m) => m.population[1]);
   const pressure = pop.map((h, i) => (h > 0 ? pred[i] / h : 0));
   const deadAt = r.marks.findIndex((m) => m.population.some((c) => c === 0));
 
   const departAt = departureAt(speed, deadAt, DEPART);
-  return { seed, gain, speed, pop, pred, pressure, deadAt, departAt };
+  return { seed, gain, speed, speedSd, pop, pred, pressure, deadAt, departAt };
 }
 
 const gains = [22, 26];
@@ -194,7 +204,12 @@ const seedCount: Record<number, number> = { 22: 24, 26: 48 };
  * 変えれば自動で取り直しになる。
  */
 const CACHE = new URL('./.cache/13-traces.json', import.meta.url);
-const cacheKey = JSON.stringify({ LONG, EVERY, gains, seedCount, DEPART });
+/**
+ * 鍵に shape を入れてある。Run に列を足したとき、これが無いと古いキャッシュが
+ * そのまま読まれて**新しい列だけ undefined**という壊れ方をする。
+ * 集計を足したら shape を上げること。
+ */
+const cacheKey = JSON.stringify({ shape: 'v2-speedSd', LONG, EVERY, gains, seedCount, DEPART });
 
 async function collect(): Promise<Run[]> {
   if (!process.env.BIOTOPE_REFRESH) {
@@ -633,6 +648,50 @@ header('節7: 離脱をイベント単位で数える（往復しているか）
     );
   }
   console.log('  ※ 戻った回数が多いなら、離脱は脱出ではなく往復の一部でしかない');
+}
+
+// ---------------------------------------------------------------------------
+header('節8: 遷移の最中、集団は割れているか滑っているか');
+
+/**
+ * 10 が速度の分布を測ったのは40000ステップ時点、つまり落ち着いた後だけ。
+ * 遷移の最中は誰も見ていない。
+ *
+ * 集団まるごとが滑るなら、集団内のばらつきは平常時と変わらない。
+ * 速い群と遅い群に一時的に割れるなら跳ね上がる。後者なら移行期に限って
+ * 二型が共存していることになり、戻った往復の意味が変わる。
+ *
+ * 平常時（低い丘にいる区間）と、遷移の最中（速度が1.2〜2.0の帯にいる区間）で比べる。
+ */
+{
+  const UP = 1.2;
+  const ARRIVE = 2.0;
+  console.log('  利得  平常時(低い丘)      遷移中(1.2〜2.0)     高い丘の上   遷移中/平常');
+  for (const gain of gains) {
+    const ok = runs.filter((r) => r.gain === gain && r.deadAt < 0);
+    const low: number[] = [];
+    const mid: number[] = [];
+    const high: number[] = [];
+    for (const r of ok) {
+      const end = r.deadAt < 0 ? r.speed.length : r.deadAt;
+      for (let i = 0; i < end; i++) {
+        const v = r.speed[i];
+        const sd = r.speedSd[i];
+        if (!Number.isFinite(sd)) continue;
+        if (v < UP) low.push(sd);
+        else if (v < ARRIVE) mid.push(sd);
+        else high.push(sd);
+      }
+    }
+    const f = (xs: number[]) =>
+      xs.length > 0 ? `${avg(xs).toFixed(3)} (n=${xs.length})` : '—';
+    const ratio = low.length > 0 && mid.length > 0 ? (avg(mid) / avg(low)).toFixed(2) : '—';
+    console.log(
+      `  ${gain}    ${f(low).padEnd(20)}${f(mid).padEnd(21)}${f(high).padEnd(13)}${ratio}`,
+    );
+  }
+  console.log('  ※ 割れているなら遷移中のばらつきが平常時より大きく出る');
+  console.log('  ※ 速度が上がれば端数の繰り上げでばらつきも増えうるので、高い丘の上と比べること');
 }
 
 await done(t0);
