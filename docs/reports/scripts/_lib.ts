@@ -33,6 +33,11 @@ export interface Trial {
     speedSd: number;
     /** 速度を測れた試行の到達速度。収束したのか散らばったのかを見るため */
     speedBySeed: number[];
+    /**
+     * 1ステップあたり大量死で取り除かれた数。設計値どおりに削れているかの確認用。
+     * `killed / mean` が条件間で揃っていて初めて「揺らぎだけを動かした」と言える
+     */
+    killed: number;
   }[];
   /** 崩壊した試行の絶滅ステップ */
   extinctAt: number[];
@@ -99,6 +104,7 @@ function summarize(total: number, rs: RunResult[]): Trial {
             ? measured.reduce((a, x) => a + x.speedSd, 0) / measured.length
             : NaN,
         speedBySeed: speeds,
+        killed: rs.reduce((a, r) => a + r.species[i].killed, 0) / total,
       };
     }),
   };
@@ -191,7 +197,16 @@ export interface Invasion {
   /** 走行ごとの定着率。平均は割れている集団を1つの数字に潰すので、範囲も出す */
   rateBySeed: number[];
   /** 在来個体数。揺らぎの大きさを測る側 */
-  resident: { name: string; mean: number; sd: number; cv: number; min: number; max: number }[];
+  resident: {
+    name: string;
+    mean: number;
+    sd: number;
+    cv: number;
+    min: number;
+    max: number;
+    /** 1ステップあたり大量死で取り除かれた数。つまみの実現値 */
+    killed: number;
+  }[];
   /**
    * 崩壊しなかった走行の全投入。ビン分けに使う。
    *
@@ -313,6 +328,7 @@ function summarizeInvasion(
               cv: mean > 0 ? sd / mean : 0,
               min: Math.min(...ok.map((r) => r.resident[i].min)),
               max: Math.max(...ok.map((r) => r.resident[i].max)),
+              killed: ok.reduce((a, r) => a + r.resident[i].killed, 0) / n,
             };
           })
         : [],

@@ -80,6 +80,26 @@ export class World {
    */
   readonly deathsEaten: Int32Array;
   readonly deathsOther: Int32Array;
+  /**
+   * 大量死で取り除いた数。種インデックス別で、毎ステップ上書きする。
+   *
+   * 餓死・寿命死（deathsOther）と混ぜない。大量死は設計上の割合と実現値が
+   * ずれていないかを確かめるための量で、混ぜると確かめられなくなる。
+   */
+  readonly deathsDisturbance: Int32Array;
+
+  /**
+   * 大量死の対象かどうか。種インデックス別に 1/0。
+   * 設定を省略した場合は全種が対象（実際に起きるかは fraction が決める）。
+   */
+  readonly disturbTarget: Uint8Array;
+  /**
+   * 大量死用の乱数。世界本体とは**別のストリーム**。
+   * 同じ rng を使うと、大量死を有効にした瞬間から在来の乱数列がずれるので、
+   * 「割合0で回した結果 = 大量死を入れる前の結果」が成り立たなくなる。
+   * パッチ場（buildPatchField）・侵入（run.ts）と同じ理由で同じ手を使っている。
+   */
+  readonly disturbanceRng: Rng;
 
   // --- エージェント ---
   readonly capacity: number;
@@ -153,6 +173,22 @@ export class World {
     this.effMetabolism = new Float64Array(n);
     this.deathsEaten = new Int32Array(n);
     this.deathsOther = new Int32Array(n);
+    this.deathsDisturbance = new Int32Array(n);
+
+    // 対象の種は構築時に固定する。id からインデックスへの変換をここで済ませておけば
+    // 毎ステップの走査は Uint8Array の参照1回で済む。
+    // 間隔と割合は config を毎ステップ読むので、UIのスライダーで即時に変わる
+    this.disturbTarget = new Uint8Array(n).fill(1);
+    const targets = config.disturbance?.species;
+    if (targets !== undefined) {
+      this.disturbTarget.fill(0);
+      for (const id of targets) {
+        const i = idToIndex.get(id);
+        if (i === undefined) throw new Error(`大量死の対象 id=${id} が種定義に存在しません`);
+        this.disturbTarget[i] = 1;
+      }
+    }
+    this.disturbanceRng = new Rng((config.seed ^ 0x7c9e3b21) >>> 0);
     this.speedSum = new Float64Array(n);
     this.speedSqSum = new Float64Array(n);
     this.speedCount = new Float64Array(n);
