@@ -395,6 +395,13 @@ export interface SpeciesResult {
   min: number;
   max: number;
   /**
+   * 集計区間での個体数の標準偏差。揺らぎの大きさを測る側として要る。
+   *
+   * 最小・最大だけだと1回の外れ値に引きずられる。揺らぎを軸にした操作
+   * （13）では、平均を変えずに揺らぎだけ動かせているかを毎回確かめる必要がある。
+   */
+  sd: number;
+  /**
    * 集計区間での平均移動速度と、集団内のばらつき（標準偏差の平均）。
    *
    * speedSamples が0のとき、この値は測定値ではなく定義値。
@@ -441,6 +448,7 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
 
   const counts = new Int32Array(n);
   const sum = new Float64Array(n);
+  const sqSum = new Float64Array(n);
   const min = new Float64Array(n).fill(Infinity);
   const max = new Float64Array(n).fill(0);
 
@@ -477,6 +485,7 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
       for (let i = 0; i < n; i++) {
         const c = counts[i];
         sum[i] += c;
+        sqSum[i] += c * c;
         if (c < min[i]) min[i] = c;
         if (c > max[i]) max[i] = c;
       }
@@ -512,15 +521,20 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
     grassMean: grassSamples > 0 ? grassSum / grassSamples : 0,
     grassProduced: samples > 0 ? producedSum / samples : 0,
     corpseInput: samples > 0 ? corpseSum / samples : 0,
-    species: w.defs.map((def, i) => ({
+    species: w.defs.map((def, i) => {
+      const mean = samples > 0 ? sum[i] / samples : 0;
+      const variance = samples > 0 ? sqSum[i] / samples - mean * mean : 0;
+      return {
       id: def.id,
       name: def.name,
-      mean: samples > 0 ? sum[i] / samples : 0,
+      mean,
       min: min[i] === Infinity ? 0 : min[i],
       max: max[i],
+      sd: variance > 0 ? Math.sqrt(variance) : 0,
       speedMean: speedSamples[i] > 0 ? speedMeanSum[i] / speedSamples[i] : def.speed,
       speedSd: speedSamples[i] > 0 ? speedSdSum[i] / speedSamples[i] : 0,
       speedSamples: speedSamples[i],
-    })),
+      };
+    }),
   };
 }
