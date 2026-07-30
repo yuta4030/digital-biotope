@@ -161,6 +161,16 @@ interface Run {
   departAt: number;
 }
 
+/**
+ * 平均速度が初めて閾値を超えたマーク。崩壊後は速度が定義値に戻るので崩壊前だけ見る。
+ * 閾値を引数にしてあるのは、感度を見るときに同じトレースから測り直すため。
+ */
+function departureAt(speed: number[], deadAt: number, threshold: number): number {
+  const end = deadAt < 0 ? speed.length : deadAt;
+  for (let i = 0; i < end; i++) if (speed[i] >= threshold) return i;
+  return -1;
+}
+
 function analyze(seed: number, gain: number, r: TraceResult): Run {
   const speed = r.marks.map((m) => m.speedMean[0]);
   const pop = r.marks.map((m) => m.population[0]);
@@ -168,15 +178,7 @@ function analyze(seed: number, gain: number, r: TraceResult): Run {
   const pressure = pop.map((h, i) => (h > 0 ? pred[i] / h : 0));
   const deadAt = r.marks.findIndex((m) => m.population.some((c) => c === 0));
 
-  // 崩壊後は速度が定義値に戻るので、遷移の判定は崩壊前だけで行う
-  const end = deadAt < 0 ? speed.length : deadAt;
-  let departAt = -1;
-  for (let i = 0; i < end; i++) {
-    if (speed[i] >= DEPART) {
-      departAt = i;
-      break;
-    }
-  }
+  const departAt = departureAt(speed, deadAt, DEPART);
   return { seed, gain, speed, pop, pred, pressure, deadAt, departAt };
 }
 
@@ -400,6 +402,116 @@ for (const gain of gains) {
       return base > 0 && windowMean(r.pop, from, from + WINDOW) / base <= cut;
     },
   );
+}
+
+// ---------------------------------------------------------------------------
+header('節5: 二つの丘は集団のサイズが違うか');
+
+/**
+ * どちらの丘も局所最適なので、**個体にとっては優劣がつかない**。
+ * だが集団のサイズは別で、10 の「進化は集団を小さくする」がここでも出るはず。
+ * 足に頼る型は実効代謝が 0.25+0.15×2.45 = 0.618、目に頼る型は 0.367 なので、
+ * 同じ草で養える頭数は速いほうが少ないと予想される。
+ *
+ * 終着の判定と同じ区間（最後の5000ステップ）で測る。
+ */
+{
+  const TAILMARKS = 50; // 50マーク = 5000ステップ
+  console.log('  利得  丘      走行  草食   肉食   速度');
+  for (const gain of gains) {
+    const ok = runs.filter((r) => r.gain === gain && r.deadAt < 0);
+    const groups: [string, Run[]][] = [
+      ['目型', ok.filter((r) => r.speed[r.speed.length - 1] < 1.2)],
+      ['足型', ok.filter((r) => r.speed[r.speed.length - 1] >= 2.0)],
+    ];
+    for (const [name, g] of groups) {
+      if (g.length === 0) {
+        console.log(`  ${gain}    ${name}    0走行`);
+        continue;
+      }
+      const at = (pick: (r: Run) => number[]) =>
+        avg(g.map((r) => windowMean(pick(r), r.speed.length - TAILMARKS, r.speed.length)));
+      console.log(
+        `  ${gain}    ${name}  ${String(g.length).padStart(3)}走行  ` +
+          `${at((r) => r.pop).toFixed(0).padStart(4)}  ${at((r) => r.pred).toFixed(0).padStart(4)}  ` +
+          `${at((r) => r.speed).toFixed(2)}`,
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+header('節6: 離脱の閾値を振ると件数はどう変わるか');
+
+/**
+ * 1.2 は「低い丘（0.76-0.83、集団内のばらつき0.13-0.19）の帯の外側」という理由で
+ * 置いた値で、それ以上の根拠は無い。結論が閾値の取り方に乗っていないかを見る。
+ */
+{
+  console.log('  利得  閾値1.0   閾値1.2   閾値1.5   閾値2.0');
+  for (const gain of gains) {
+    const ok = runs.filter((r) => r.gain === gain && r.deadAt < 0);
+    const counts = [1.0, 1.2, 1.5, 2.0].map(
+      (th) => ok.filter((r) => departureAt(r.speed, r.deadAt, th) >= 0).length,
+    );
+    console.log(
+      `  ${gain}    ` +
+        counts.map((c) => `${String(c).padStart(2)}/${ok.length}`.padEnd(10)).join(''),
+    );
+  }
+  console.log('  ※ 閾値2.0は「高い丘に着いた」に近いので、終着の高と一致するはず');
+}
+
+// ---------------------------------------------------------------------------
+header('節7: 離脱をイベント単位で数える（往復しているか）');
+
+/**
+ * これまでの「離脱N件」は**走行あたり最初の1回**しか数えていない。
+ * 10 の seed 8000 が 0.83 → 1.57 → 2.40 → 1.85 と往復したような動きは1件に潰れる。
+ *
+ * 上りと下りで別の閾値を使う（ヒステリシス）。同じ閾値だと境界での小さな揺れを
+ * 何度も数えてしまう。
+ */
+{
+  const UP = 1.2;
+  const DOWN = 1.0;
+  const ARRIVE = 2.0;
+
+  console.log('  利得  走行  離脱イベント  うち2.0到達  戻った  走行あたり');
+  for (const gain of gains) {
+    const ok = runs.filter((r) => r.gain === gain && r.deadAt < 0);
+    let events = 0;
+    let arrived = 0;
+    let returned = 0;
+
+    for (const r of ok) {
+      const end = r.deadAt < 0 ? r.speed.length : r.deadAt;
+      let out = false; // いま低い丘を離れている最中か
+      let hitHigh = false;
+      for (let i = 0; i < end; i++) {
+        if (!out && r.speed[i] >= UP) {
+          out = true;
+          hitHigh = false;
+          events++;
+        } else if (out) {
+          if (r.speed[i] >= ARRIVE && !hitHigh) {
+            hitHigh = true;
+            arrived++;
+          }
+          if (r.speed[i] < DOWN) {
+            out = false;
+            returned++;
+          }
+        }
+      }
+    }
+    console.log(
+      `  ${gain}   ${String(ok.length).padStart(3)}  ${String(events).padStart(8)}  ` +
+        `${String(arrived).padStart(11)}  ${String(returned).padStart(6)}  ` +
+        `${(events / ok.length).toFixed(2).padStart(8)}`,
+    );
+  }
+  console.log('  ※ 戻った回数が多いなら、離脱は脱出ではなく往復の一部でしかない');
 }
 
 await done(t0);
