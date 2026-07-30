@@ -22,6 +22,8 @@ export interface Trial {
     mean: number;
     min: number;
     max: number;
+    /** 個体数の標準偏差（各試行の値を平均したもの）。揺らぎの大きさを測る側 */
+    sd: number;
     /**
      * 速度を測れた試行だけで平均した移動速度。速度が遺伝しない種では定義値。
      * 絶滅した試行は除いてある。混ぜると初期速度に引き寄せられた偽の数字になる
@@ -90,6 +92,7 @@ function summarize(total: number, rs: RunResult[]): Trial {
         mean: rs.reduce((a, r) => a + r.species[i].mean, 0) / total,
         min: Math.min(...rs.map((r) => r.species[i].min)),
         max: Math.max(...rs.map((r) => r.species[i].max)),
+        sd: rs.reduce((a, r) => a + r.species[i].sd, 0) / total,
         speed: speeds.length > 0 ? speeds.reduce((a, b) => a + b, 0) / speeds.length : NaN,
         speedSd:
           measured.length > 0
