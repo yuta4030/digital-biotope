@@ -405,6 +405,127 @@ for (const gain of gains) {
 }
 
 // ---------------------------------------------------------------------------
+header('節4b: 全ての離脱イベントで測り直す');
+
+/**
+ * 節4 は走行ごとの**最初の1回**しか使っていない。節7 で分かったとおり離脱は
+ * 頻繁に起きていて（利得22 で1走行3.58回）、最初の1件は全体の2割でしかない。
+ * 全イベントで測り直す。
+ *
+ * さらに、本当に知りたいのは**成功した脱出と失敗した往復で谷の深さが違うか**。
+ * 節7 で「離脱は頻繁で、稀なのは居着くほう」と分かったので、
+ * 離脱の条件ではなく定着の条件のほうが本題になる。
+ */
+interface Excursion {
+  run: Run;
+  /** 上りの瞬間のマーク位置 */
+  at: number;
+  /** 2.0 に到達したか */
+  arrived: boolean;
+  /** 低い丘へ戻ったか */
+  returned: boolean;
+}
+
+const UP = 1.2;
+const DOWN = 1.0;
+const ARRIVE = 2.0;
+
+/** 低い丘にいる区間だけを対照に使う。離脱中の窓を混ぜると比較にならない */
+function lowMask(r: Run): boolean[] {
+  const end = r.deadAt < 0 ? r.speed.length : r.deadAt;
+  const mask = new Array<boolean>(r.speed.length).fill(false);
+  let out = false;
+  for (let i = 0; i < end; i++) {
+    if (!out && r.speed[i] >= UP) out = true;
+    else if (out && r.speed[i] < DOWN) out = false;
+    mask[i] = !out;
+  }
+  return mask;
+}
+
+function excursions(r: Run): Excursion[] {
+  const end = r.deadAt < 0 ? r.speed.length : r.deadAt;
+  const out: Excursion[] = [];
+  let cur: Excursion | null = null;
+  for (let i = 0; i < end; i++) {
+    if (cur === null && r.speed[i] >= UP) {
+      cur = { run: r, at: i, arrived: false, returned: false };
+      out.push(cur);
+    } else if (cur !== null) {
+      if (r.speed[i] >= ARRIVE) cur.arrived = true;
+      if (r.speed[i] < DOWN) {
+        cur.returned = true;
+        cur = null;
+      }
+    }
+  }
+  return out;
+}
+
+{
+  console.log('  対照は「低い丘にいる区間の窓」だけ。離脱中の窓を混ぜないため\n');
+  console.log('  利得  対象            件数  直前   対照   位置  下位25%  上位25%');
+
+  for (const gain of gains) {
+    const ok = runs.filter((r) => r.gain === gain && r.deadAt < 0);
+    const all: Excursion[] = [];
+    for (const r of ok) all.push(...excursions(r));
+
+    /** 定着した離脱 = 2.0 に届いて、そのまま低い丘へ戻らなかったもの */
+    const groups: [string, Excursion[]][] = [
+      ['全イベント', all],
+      ['戻った往復', all.filter((e) => e.returned)],
+      ['定着した脱出', all.filter((e) => e.arrived && !e.returned)],
+    ];
+
+    for (const [label, es] of groups) {
+      const before: number[] = [];
+      const control: number[] = [];
+      let skipped = 0;
+
+      for (const r of ok) {
+        const mask = lowMask(r);
+        // 基準はこの走行が低い丘にいた区間の平均。離脱中を混ぜると水準がずれる
+        const lows: number[] = [];
+        for (let i = 0; i < mask.length; i++) if (mask[i]) lows.push(r.pop[i]);
+        if (lows.length === 0) continue;
+        const base = lows.reduce((a, b) => a + b, 0) / lows.length;
+        if (base <= 0) continue;
+
+        // 対照: 窓が丸ごと低い丘の区間に入っているものだけ
+        for (let i = 0; i + WINDOW <= mask.length; i++) {
+          let allLow = true;
+          for (let k = i; k < i + WINDOW; k++) if (!mask[k]) { allLow = false; break; }
+          if (allLow) control.push(windowMean(r.pop, i, i + WINDOW) / base);
+        }
+
+        for (const e of es) {
+          if (e.run !== r) continue;
+          if (e.at < WINDOW) { skipped++; continue; }
+          before.push(windowMean(r.pop, e.at - WINDOW, e.at) / base);
+        }
+      }
+
+      if (before.length === 0 || control.length === 0) {
+        console.log(`  ${gain}    ${label.padEnd(14)} 測れる件が無い（除外${skipped}）`);
+        continue;
+      }
+      const pct = before.map((b) => control.filter((c) => c < b).length / control.length);
+      const lo = pct.filter((x) => x < 0.25).length;
+      const hi = pct.filter((x) => x > 0.75).length;
+      console.log(
+        `  ${gain}    ${label.padEnd(14)}${String(before.length).padStart(4)}  ` +
+          `${avg(before).toFixed(3)}  ${avg(control).toFixed(3)}  ` +
+          `${(avg(pct) * 100).toFixed(0).padStart(3)}%  ` +
+          `${`${lo}/${before.length}`.padStart(7)}  ${`${hi}/${before.length}`.padStart(7)}`,
+      );
+    }
+    console.log('');
+  }
+  console.log('  ※ 定着した脱出だけ谷が深いなら、揺らぎは離脱ではなく定着のほうを助けている');
+}
+
+// ---------------------------------------------------------------------------
 header('節5: 二つの丘は集団のサイズが違うか');
 
 /**
