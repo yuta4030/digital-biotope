@@ -317,6 +317,31 @@ if (want('6')) {
   labels.forEach((l, i) => regimeLine(l, ts[i], 0));
   console.log('\n  [肉食動物]');
   labels.forEach((l, i) => regimeLine(l, ts[i], 1));
+
+  /**
+   * **上の表の生存率は走行の長さに依存する。**
+   *
+   * 崩壊は1回の大きな削りごとに起きうるので、確率は走行が長いほど積み上がる。
+   * 8000ステップで 8/8 なのは「壊れない」ではなく「まだ壊れていない」でしかない。
+   * 節7 の侵入の実験は1走行が15万ステップを超えるので、そこで使える塊の
+   * 大きさはここで決まる。**この確認をせずに節7へ進むと、崩壊で欠けた条件を
+   * 「定着率が低い条件」として読むことになる**（09 の罠と同じ形）。
+   */
+  console.log('\n  走行を伸ばすと崩壊が積み上がる（草食のみを叩いた場合）');
+  for (const steps of [8000, 30000, 90000]) {
+    const long = await trials(
+      LUMPS.map((l) => () => {
+        const cfg = basic();
+        cfg.disturbance = { interval: l.interval, fraction: l.fraction, species: [1] };
+        return cfg;
+      }),
+      { seeds: SEEDS_8, steps, tail: TAIL },
+    );
+    console.log(
+      `  ${String(steps).padStart(6)}歩  ` +
+        LUMPS.map((l, i) => `${l.label} 生存${long[i].survived}/8`).join('   '),
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -414,6 +439,10 @@ if (want('7')) {
    * ビンの中でも差が残るなら、同じ深さの谷でも通りやすさが違うことになる。
    */
   const depthLine = (label: string, v: Invasion): void => {
+    if (v.all.length === 0) {
+      console.log(`  ${label.padEnd(20)}（崩壊せずに測り切った走行なし）`);
+      return;
+    }
     const bins = BINS.map(() => ({ n: 0, e: 0 }));
     for (const a of v.all) {
       const x = a.ratio[0];
@@ -448,9 +477,13 @@ if (want('7')) {
     for (const c of conds) {
       const v = await invade(() => cfgOf(met, c.d), { ...BASE, seeds: SEEDS_8 });
       const r = v.resident[0];
-      // 最小/平均は谷の深さ。変動係数は谷と山を区別しないので、両方出す
+      // 全走行が崩壊すると在来の統計そのものが無い。そこで落ちると
+      // 「測れなかった」が「走らせていない」に化けるので、行として残す
       invasionLine(
-        `${c.label} cv${r.cv.toFixed(3)} 在来${r.mean.toFixed(0)} 谷${(r.min / r.mean).toFixed(2)}`,
+        r === undefined
+          ? `${c.label} 全走行が崩壊`
+          : // 最小/平均は谷の深さ。変動係数は谷と山を区別しないので、両方出す
+            `${c.label} cv${r.cv.toFixed(3)} 在来${r.mean.toFixed(0)} 谷${(r.min / r.mean).toFixed(2)}`,
         v,
       );
       vs.push(v);
