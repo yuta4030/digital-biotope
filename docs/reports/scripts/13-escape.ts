@@ -352,6 +352,41 @@ for (const r of runs) {
   if (xs.length > 0) troughCut.set(r.seed * 100 + r.gain, xs[Math.floor(xs.length / 3)]);
 }
 
+/**
+ * 逆向きの切り分け。**捕食者の数を揃えた窓だけ**で、草食の谷がまだ効くか。
+ *
+ * 捕食圧（捕食者/草食）は草食を分母に持つので、草食が谷なら算術的に上がる。
+ * 12 で「1個体あたりの草 ≒ 定数 ÷ 在来」だったのと同じ形で、片方を固定しないと
+ * どちらが動かしているか言えない。捕食者の頭数は草食と算術的に結びついていないので、
+ * これを揃えれば独立な検定になる。
+ */
+const predCut = new Map<number, number>();
+for (const r of runs) {
+  if (r.deadAt >= 0 || r.departAt < WINDOW * 2) continue;
+  const base = windowMean(r.pred, 0, r.departAt);
+  const xs: number[] = [];
+  for (let i = 0; i + WINDOW <= r.departAt - WINDOW; i++) {
+    xs.push(windowMean(r.pred, i, i + WINDOW) / base);
+  }
+  xs.sort((a, b) => a - b);
+  if (xs.length > 0) predCut.set(r.seed * 100 + r.gain, xs[Math.floor(xs.length / 2)]);
+}
+
+console.log('\n  [捕食者が多い窓（その走行の上位50%）だけに限った草食の個体数]');
+for (const gain of gains) {
+  compare(
+    '草食|捕食者多',
+    gain,
+    (r, a, b) => windowMean(r.pop, a, b),
+    (r, from) => {
+      const cut = predCut.get(r.seed * 100 + r.gain);
+      if (cut === undefined) return false;
+      const base = windowMean(r.pred, 0, r.departAt);
+      return base > 0 && windowMean(r.pred, from, from + WINDOW) / base >= cut;
+    },
+  );
+}
+
 console.log('\n  [草食が谷（その走行の下位33%）の窓だけに限った捕食圧]');
 for (const gain of gains) {
   compare(
