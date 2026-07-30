@@ -138,6 +138,15 @@ interface Run {
   speed: number[];
   /** 草食の個体数の推移 */
   pop: number[];
+  /**
+   * 捕食者の個体数の推移。
+   *
+   * 谷は同時に捕食圧が最も高い瞬間でもある（捕食者と被食者は位相がずれる）ので、
+   * 「谷で離脱する」だけでは揺らぎの話か強い方向性選択の話か区別がつかない。
+   */
+  pred: number[];
+  /** 捕食圧の代理。草食1個体あたりの捕食者数 */
+  pressure: number[];
   /** 崩壊したマークの位置。-1 なら最後まで保った */
   deadAt: number;
   /** 低い丘を離れたマークの位置。-1 なら離れていない */
@@ -147,6 +156,8 @@ interface Run {
 function analyze(seed: number, gain: number, r: TraceResult): Run {
   const speed = r.marks.map((m) => m.speedMean[0]);
   const pop = r.marks.map((m) => m.population[0]);
+  const pred = r.marks.map((m) => m.population[1]);
+  const pressure = pop.map((h, i) => (h > 0 ? pred[i] / h : 0));
   const deadAt = r.marks.findIndex((m) => m.population.some((c) => c === 0));
 
   // 崩壊後は速度が定義値に戻るので、遷移の判定は崩壊前だけで行う
@@ -158,7 +169,7 @@ function analyze(seed: number, gain: number, r: TraceResult): Run {
       break;
     }
   }
-  return { seed, gain, speed, pop, deadAt, departAt };
+  return { seed, gain, speed, pop, pred, pressure, deadAt, departAt };
 }
 
 const gains = [22, 26];
@@ -206,51 +217,81 @@ const windowMean = (pop: number[], from: number, to: number): number => {
   return s / (to - from);
 };
 
-{
-  const rows: { gain: number; before: number[]; control: number[] }[] = [];
+const avg = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
 
-  for (const gain of gains) {
-    const before: number[] = [];
-    const control: number[] = [];
+/**
+ * 離脱直前の窓を、同じ走行の対照窓の分布と比べる。
+ *
+ * `pick` で系列を選ぶ。草食個体数・捕食者数・捕食圧のどれでも同じ形で測れる。
+ * `keep` を渡すと対照窓を絞れる（草食の谷だけに限定して捕食圧を比べる用）。
+ */
+function compare(
+  label: string,
+  gain: number,
+  pick: (r: Run) => number[],
+  keep?: (r: Run, from: number) => boolean,
+): void {
+  const before: number[] = [];
+  const control: number[] = [];
+  let skipped = 0;
 
-    for (const r of runs) {
-      if (r.gain !== gain || r.deadAt >= 0 || r.departAt < WINDOW) continue;
-
-      // 離脱までの区間が低い丘にいた期間。ここを基準にする
-      const base = windowMean(r.pop, 0, r.departAt);
-      before.push(windowMean(r.pop, r.departAt - WINDOW, r.departAt) / base);
-
-      // 同じ走行の、離脱前の区間から取った窓すべて。位置による偏りを避けるため全部使う
-      for (let i = 0; i + WINDOW <= r.departAt - WINDOW; i++) {
-        control.push(windowMean(r.pop, i, i + WINDOW) / base);
-      }
-    }
-    rows.push({ gain, before, control });
-  }
-
-  for (const { gain, before, control } of rows) {
-    if (before.length === 0) {
-      console.log(`  利得${gain}  離脱が無いか窓が足りない`);
+  for (const r of runs) {
+    if (r.gain !== gain || r.deadAt >= 0 || r.departAt < 0) continue;
+    // 離脱の直前に窓ぶんの履歴が無い走行は測れない。黙って落とさず数える
+    if (r.departAt < WINDOW * 2) {
+      skipped++;
       continue;
     }
-    const avg = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
-    // 離脱直前の窓が、対照の分布のどこに来るか。低いほど「谷で離脱した」
-    const pct = before.map(
-      (b) => control.filter((c) => c < b).length / control.length,
-    );
-    console.log(
-      `  利得${gain}  離脱 ${before.length}件  ` +
-        `直前の窓 ${avg(before).toFixed(3)}  対照 ${avg(control).toFixed(3)}  ` +
-        `（対照分布での位置 平均${(avg(pct) * 100).toFixed(0)}%）`,
-    );
-    const lo = before.filter((_, i) => pct[i] < 0.25).length;
-    const hi = before.filter((_, i) => pct[i] > 0.75).length;
-    console.log(
-      `           下位25%に入った離脱 ${lo}/${before.length}  ` +
-        `上位25%に入った離脱 ${hi}/${before.length}`,
-    );
+    const series = pick(r);
+    // 離脱までの区間が低い丘にいた期間。ここを基準にして走行間の水準差を消す
+    const base = windowMean(series, 0, r.departAt);
+    if (base <= 0) continue;
+    before.push(windowMean(series, r.departAt - WINDOW, r.departAt) / base);
+
+    // 同じ走行の、離脱前の区間から取った窓すべて。位置による偏りを避けるため全部使う
+    for (let i = 0; i + WINDOW <= r.departAt - WINDOW; i++) {
+      if (keep && !keep(r, i)) continue;
+      control.push(windowMean(series, i, i + WINDOW) / base);
+    }
   }
-  console.log('  ※ 谷で起きるなら「直前の窓」が対照より小さく、位置が50%を大きく下回る');
+
+  if (before.length === 0 || control.length === 0) {
+    console.log(`  ${label} 利得${gain}  測れる離脱が無い（除外 ${skipped}）`);
+    return;
+  }
+  const pct = before.map((b) => control.filter((c) => c < b).length / control.length);
+  const lo = pct.filter((p) => p < 0.25).length;
+  const hi = pct.filter((p) => p > 0.75).length;
+  console.log(
+    `  ${label} 利得${gain}  離脱${String(before.length).padStart(2)}件` +
+      `（除外${skipped}）  直前 ${avg(before).toFixed(3)}  対照 ${avg(control).toFixed(3)}` +
+      `  位置 平均${(avg(pct) * 100).toFixed(0).padStart(3)}%` +
+      `  下位25% ${lo}/${before.length}  上位25% ${hi}/${before.length}`,
+  );
+}
+
+console.log('\n  [草食の個体数] 谷で離脱するなら 直前 < 対照、位置が50%を下回る');
+for (const gain of gains) compare('草食', gain, (r) => r.pop);
+
+console.log('\n  [捕食者の個体数]');
+for (const gain of gains) compare('捕食者', gain, (r) => r.pred);
+
+console.log('\n  [捕食圧 = 捕食者 / 草食] 仮説Bなら 直前 > 対照、位置が50%を上回る');
+for (const gain of gains) compare('捕食圧', gain, (r) => r.pressure);
+
+/**
+ * 切り分け。**草食が谷にある窓だけを対照にして**、捕食圧を比べる。
+ *
+ * 谷は同時に捕食圧が高い瞬間なので、上の3つは全部同じ位相を写している可能性がある
+ * （12 で在来個体数・草・捕食者のどれで割っても勾配が出たのと同じ形）。
+ * 谷を固定してなお捕食圧が高いなら仮説B、平らなら谷そのものが効いている。
+ */
+console.log('\n  [草食が谷（下位33%）の窓だけに限った捕食圧]');
+for (const gain of gains) {
+  compare('捕食圧|谷', gain, (r) => r.pressure, (r, from) => {
+    const base = windowMean(r.pop, 0, r.departAt);
+    return base > 0 && windowMean(r.pop, from, from + WINDOW) / base < 0.85;
+  });
 }
 
 await done(t0);
