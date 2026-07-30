@@ -94,6 +94,7 @@ export async function runSweep(
         mean: avg(results.map((r) => r.species[i].mean)),
         min: Math.min(...results.map((r) => r.species[i].min)),
         max: Math.max(...results.map((r) => r.species[i].max)),
+        sd: avg(results.map((r) => r.species[i].sd)),
         // 測れた試行だけで平均する。絶滅した試行の定義値を混ぜると
         // 初期速度に引き寄せられた偽の数字になる
         ...speedOver(results.map((r) => r.species[i])),
