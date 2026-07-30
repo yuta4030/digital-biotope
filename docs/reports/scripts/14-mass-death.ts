@@ -10,6 +10,7 @@ import {
   done,
   banner,
   type Trial,
+  type Invasion,
 } from './_lib.ts';
 
 /**
@@ -277,7 +278,49 @@ if (want('5')) {
 }
 
 // ---------------------------------------------------------------------------
-if (want('6')) header('節6 揺らぎの大きさを変えると、侵入者の定着率はどう動くか');
+if (want('6')) header('節6 揺らぎはどこまで大きくできるか（基本構成）');
+
+/**
+ * 節2 で取れた揺らぎは変動係数 0.34〜0.50 で、**上端が大量死なし**だった。
+ * これでは予想表の「大きすぎると殺しにかかる」側が範囲の外に出てしまう。
+ * 除去率 0.1%/歩 を保ったまま塊を大きくして、既定より上に出られるかを見る。
+ *
+ * 対象を全種にしたままだと出られない。1回の削りを大きくすると**捕食者が先に消える**。
+ * 上の層ほど個体数の桁が小さく、偶然だけで消える（[04](../04-metabolism-stability.md)）。
+ * 崩壊した走行を混ぜた統計は読めない（[09](../09-detritus-buffer.md) の罠）ので、
+ * 草食だけを叩く形に変えて範囲を伸ばす。
+ */
+if (want('6')) {
+  const LUMPS: { label: string; interval: number; fraction: number }[] = [
+    { label: '500歩×50%', interval: 500, fraction: 0.5 },
+    { label: '800歩×80%', interval: 800, fraction: 0.8 },
+    { label: '900歩×90%', interval: 900, fraction: 0.9 },
+  ];
+  const cases: { label: string; species?: number[] }[] = [
+    { label: '全種' },
+    { label: '草食のみ', species: [1] },
+  ];
+  const builds: (() => WorldConfig)[] = [basic];
+  const labels = ['大量死なし'];
+  for (const c of cases) {
+    for (const l of LUMPS) {
+      labels.push(`${c.label} ${l.label}`);
+      builds.push(() => {
+        const cfg = basic();
+        cfg.disturbance = { interval: l.interval, fraction: l.fraction, species: c.species };
+        return cfg;
+      });
+    }
+  }
+  const ts = await trials(builds, { seeds: SEEDS_8, steps: STEPS, tail: TAIL });
+  console.log('  [草食動物]');
+  labels.forEach((l, i) => regimeLine(l, ts[i], 0));
+  console.log('\n  [肉食動物]');
+  labels.forEach((l, i) => regimeLine(l, ts[i], 1));
+}
+
+// ---------------------------------------------------------------------------
+if (want('7')) header('節7 揺らぎの大きさを変えると、侵入者の定着率はどう動くか');
 
 /**
  * DIRECTION.md がずっと掲げてきて 12 でも 13 でも測れなかった予想表
@@ -286,20 +329,19 @@ if (want('6')) header('節6 揺らぎの大きさを変えると、侵入者の�
  * 枠組みは 12 のまま。在来の草食を複製して代謝だけ変えた種を1体ずつ投入し、
  * 30体に達したら定着とみなす。変えるのは大量死の設定だけ。
  *
- * 基本構成では大量死は揺らぎを**減らす**方向に働く（節2）。つまみの向きが
- * 進化構成と逆だが、変動係数 0.34〜0.50 の4段が取れるので軸としては使える。
+ * **肉食は対象から外す**（節6）。全種を叩くと大きい塊で捕食者が絶滅し、
+ * 崩壊を除いた残りだけで定着率を測ることになる。除去率はどの条件も 0.1%/歩 で、
+ * 動くのは1回の削りの大きさだけ。
  *
- * **「在来のみ」の条件が要る。** 全種を叩くと、まだ1体しかいない侵入者も
+ * **「在来のみ」の条件が要る。** 草食2種を叩くと、まだ1体しかいない侵入者も
  * 同じ確率で殺される。定着率が下がったとき、それが「窓が開かなかった」のか
  * 「窓は開いたが侵入者が巻き添えで消えた」のか、分けないと言えない。
  * DIRECTION.md の「揺らぎは両刃」を、刃の片方を外して測る形。
  *
- * **測れるのは予想表の片側だけ。** 基本構成でこのつまみが動かせる範囲は
- * 変動係数 0.34〜0.50 で、大量死なしが上端になる（節2）。
- * 揺らぎを既定より大きくする条件が作れないので、「大きすぎると殺しにかかる」側は
- * ここでは検定できない。測れるのは「減らすと定着率はどう動くか」まで。
+ * 節8は同じ走行から出す。投入時の在来個体数でビン分けすれば、条件間の差が
+ * 「同じ谷でも通りやすさが違う」のか「谷に当たる頻度が違うだけ」なのかが分かれる。
  */
-if (want('6')) {
+if (want('7')) {
   /** 12 と同じ構成。在来 id=1 / 侵入者 id=3 / 肉食 id=2（肉食は両方を食べる） */
   const cfgOf = (invaderMetabolism: number, d?: WorldConfig['disturbance']): WorldConfig => {
     const cfg = presetByKey('basic').build();
@@ -332,35 +374,109 @@ if (want('6')) {
     followUp: 0,
     followEvery: 1000,
   };
-  /** 在来（id 1）と肉食（id 2）だけを叩く。侵入者（id 3）は巻き添えを免れる */
-  const RESIDENT_ONLY = [1, 2];
+  /** 草食2種（在来 id=1 と侵入者 id=3）を叩く。肉食 id=2 は対象外 */
+  const BOTH_GRAZERS = [1, 3];
+  /** 在来だけを叩く。1体しかいない侵入者は巻き添えを免れる */
+  const RESIDENT_ONLY = [1];
+
+  /** 除去率はどれも 0.1%/歩（割合÷間隔）。動くのは1回の削りの大きさだけ */
+  const LUMPS: { label: string; interval: number; fraction: number }[] = [
+    { label: '20歩×2%', interval: 20, fraction: 0.02 },
+    { label: '100歩×10%', interval: 100, fraction: 0.1 },
+    { label: '500歩×50%', interval: 500, fraction: 0.5 },
+    { label: '800歩×80%', interval: 800, fraction: 0.8 },
+    { label: '900歩×90%', interval: 900, fraction: 0.9 },
+  ];
 
   const conds: { label: string; d?: WorldConfig['disturbance'] }[] = [
-    { label: 'なし' },
-    { label: '小刻み 全種', d: { interval: 20, fraction: 0.02 } },
-    { label: '中     全種', d: { interval: 100, fraction: 0.1 } },
-    { label: '大     全種', d: { interval: 500, fraction: 0.5 } },
-    { label: '小刻み 在来のみ', d: { interval: 20, fraction: 0.02, species: RESIDENT_ONLY } },
-    { label: '中     在来のみ', d: { interval: 100, fraction: 0.1, species: RESIDENT_ONLY } },
-    { label: '大     在来のみ', d: { interval: 500, fraction: 0.5, species: RESIDENT_ONLY } },
+    { label: 'なし', },
+    ...LUMPS.map((l) => ({
+      label: `${l.label} 草食2種`,
+      d: { interval: l.interval, fraction: l.fraction, species: BOTH_GRAZERS },
+    })),
+    ...LUMPS.map((l) => ({
+      label: `${l.label} 在来のみ`,
+      d: { interval: l.interval, fraction: l.fraction, species: RESIDENT_ONLY },
+    })),
   ];
+
+  /**
+   * 投入時の在来個体数のビン。走行ごとの平均に対する比なので、
+   * 走行間の水準差は落ちている（12 と同じ扱い）。
+   */
+  const BINS = [0, 0.5, 0.75, 1.0, 1.5];
+
+  /**
+   * ビンごとに「そのビンに入った投入の割合」と「そのビンでの定着率」を並べる。
+   *
+   * **条件間の差がどちらから来ているかを分けるための表。** 同じビンの中で
+   * 定着率が揃っているなら、世界間の差は「谷に当たる頻度」だけで説明できる。
+   * ビンの中でも差が残るなら、同じ深さの谷でも通りやすさが違うことになる。
+   */
+  const depthLine = (label: string, v: Invasion): void => {
+    const bins = BINS.map(() => ({ n: 0, e: 0 }));
+    for (const a of v.all) {
+      const x = a.ratio[0];
+      let b = 0;
+      while (b < BINS.length - 1 && x >= BINS[b + 1]) b++;
+      bins[b].n++;
+      if (a.established) bins[b].e++;
+    }
+    const total = v.all.length;
+    const cells = bins
+      .map((b) =>
+        b.n > 0
+          ? `${((b.n / total) * 100).toFixed(0)}%→${((b.e / b.n) * 100).toFixed(0)}%`
+          : '—',
+      )
+      .map((s) => s.padStart(10))
+      .join('');
+    console.log(`  ${label.padEnd(20)}${cells}`);
+  };
 
   // 12 と同じ校正点。中立は「有利さゼロでも通ってしまう率」、
   // 不利は「局所最適から抜けるのに要る、選択に逆らう通過」に対応する
-  for (const [label, met] of [
+  const CALIB: [string, number][] = [
     ['中立 0.60', 0.6],
     ['不利 0.63', 0.63],
-  ] as [string, number][]) {
+  ];
+  const byCalib: Invasion[][] = [];
+
+  for (const [label, met] of CALIB) {
     console.log(`\n  [${label}]`);
+    const vs: Invasion[] = [];
     for (const c of conds) {
       const v = await invade(() => cfgOf(met, c.d), { ...BASE, seeds: SEEDS_8 });
       const r = v.resident[0];
+      // 最小/平均は谷の深さ。変動係数は谷と山を区別しないので、両方出す
       invasionLine(
-        `${c.label} cv${r.cv.toFixed(3)} 在来${r.mean.toFixed(0)}`,
+        `${c.label} cv${r.cv.toFixed(3)} 在来${r.mean.toFixed(0)} 谷${(r.min / r.mean).toFixed(2)}`,
         v,
       );
+      vs.push(v);
     }
+    byCalib.push(vs);
   }
+
+  // -------------------------------------------------------------------------
+  header('節8 差は「谷の深さ」か「谷に当たる頻度」か');
+
+  /**
+   * 節7 の表では、変動係数が同じでも定着率が違う対がありうる。
+   * 変動係数は谷と山を区別しないので、揺らぎの代弁者としては粗い。
+   *
+   * ここでは投入時の在来個体数で分ける。**各ビンの中で定着率が揃っていれば、
+   * 世界間の差は「谷に当たる頻度」だけで説明がつく。** 揺らぎの量そのものが
+   * 効いているのではなく、谷という同じ機会がどれだけ訪れるかの違いになる。
+   */
+  console.log(`  ${'条件'.padEnd(18)}${BINS.map((lo, i) =>
+    `${lo.toFixed(2)}〜${i < BINS.length - 1 ? BINS[i + 1].toFixed(2) : '∞'}`.padStart(10),
+  ).join('')}`);
+  console.log('  （各セルは 投入の割合→そのビンでの定着率）');
+  CALIB.forEach(([label], k) => {
+    console.log(`\n  [${label}]`);
+    conds.forEach((c, i) => depthLine(c.label, byCalib[k][i]));
+  });
 }
 
 await done(t0);
