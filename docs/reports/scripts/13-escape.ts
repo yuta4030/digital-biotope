@@ -1,3 +1,4 @@
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { presetByKey } from '../../../src/core/presets.ts';
 import { traceMany, type TraceJob } from '../../../src/sweep/pool.ts';
 import type { TraceResult } from '../../../src/sweep/run.ts';
@@ -145,7 +146,14 @@ interface Run {
    * 「谷で離脱する」だけでは揺らぎの話か強い方向性選択の話か区別がつかない。
    */
   pred: number[];
-  /** 捕食圧の代理。草食1個体あたりの捕食者数 */
+  /**
+   * 捕食圧の代理。草食1個体あたりの捕食者数。
+   *
+   * **窓で使うときはマークごとの比を平均してはいけない。** pop が谷で小さくなると
+   * pred/pop が跳ね上がるので、比の平均は谷の深さに支配される。最初そう実装して、
+   * 「草食が低く捕食者が高いのに捕食圧は低い」という辻褄の合わない表が出た。
+   * 窓では windowRatio（窓平均どうしの比）を使う。
+   */
   pressure: number[];
   /** 崩壊したマークの位置。-1 なら最後まで保った */
   deadAt: number;
@@ -175,12 +183,42 @@ function analyze(seed: number, gain: number, r: TraceResult): Run {
 const gains = [22, 26];
 const seedCount: Record<number, number> = { 22: 24, 26: 48 };
 
-const runs: Run[] = [];
-for (const gain of gains) {
-  const seeds = seedsOf(seedCount[gain]);
-  const rs = await traceMany(seeds.map((s) => job({ gain }, s, LONG, EVERY)));
-  seeds.forEach((s, i) => runs.push(analyze(s, gain, rs[i])));
+/**
+ * トレースをキャッシュする。節3の72本（40000ステップ・視野3）で14分掛かるのに、
+ * 節4は同じトレースを集計し直すだけなので、解析を1回直すたびに14分払うのは無駄。
+ *
+ * BIOTOPE_REFRESH=1 で取り直す。**条件（利得・シード数・ステップ・刻み）を
+ * 変えたら必ず取り直すこと。** キャッシュの鍵に条件を入れてあるので、
+ * 変えれば自動で取り直しになる。
+ */
+const CACHE = new URL('./.cache/13-traces.json', import.meta.url);
+const cacheKey = JSON.stringify({ LONG, EVERY, gains, seedCount, DEPART });
+
+async function collect(): Promise<Run[]> {
+  if (!process.env.BIOTOPE_REFRESH) {
+    try {
+      const saved = JSON.parse(await readFile(CACHE, 'utf8'));
+      if (saved.key === cacheKey) {
+        console.log('  （トレースはキャッシュから。取り直すには BIOTOPE_REFRESH=1）');
+        return saved.runs as Run[];
+      }
+      console.log('  （条件が変わっているのでトレースを取り直す）');
+    } catch {
+      // 無ければ取る
+    }
+  }
+  const out: Run[] = [];
+  for (const gain of gains) {
+    const seeds = seedsOf(seedCount[gain]);
+    const rs = await traceMany(seeds.map((s) => job({ gain }, s, LONG, EVERY)));
+    seeds.forEach((s, i) => out.push(analyze(s, gain, rs[i])));
+  }
+  await mkdir(new URL('./.cache/', import.meta.url), { recursive: true });
+  await writeFile(CACHE, JSON.stringify({ key: cacheKey, runs: out }));
+  return out;
 }
+
+const runs = await collect();
 
 for (const gain of gains) {
   const g = runs.filter((r) => r.gain === gain);
@@ -217,6 +255,15 @@ const windowMean = (pop: number[], from: number, to: number): number => {
   return s / (to - from);
 };
 
+/**
+ * 窓 [from, to) での「捕食者1体あたり」ではなく「草食1体あたりの捕食者数」。
+ * 窓平均どうしの比なので、谷の深さに支配されない。
+ */
+const windowRatio = (num: number[], den: number[], from: number, to: number): number => {
+  const d = windowMean(den, from, to);
+  return d > 0 ? windowMean(num, from, to) / d : 0;
+};
+
 const avg = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
 
 /**
@@ -228,7 +275,8 @@ const avg = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
 function compare(
   label: string,
   gain: number,
-  pick: (r: Run) => number[],
+  /** 窓 [from, to) の値。系列の平均でも、窓平均どうしの比でもよい */
+  valueOf: (r: Run, from: number, to: number) => number,
   keep?: (r: Run, from: number) => boolean,
 ): void {
   const before: number[] = [];
@@ -242,16 +290,15 @@ function compare(
       skipped++;
       continue;
     }
-    const series = pick(r);
     // 離脱までの区間が低い丘にいた期間。ここを基準にして走行間の水準差を消す
-    const base = windowMean(series, 0, r.departAt);
+    const base = valueOf(r, 0, r.departAt);
     if (base <= 0) continue;
-    before.push(windowMean(series, r.departAt - WINDOW, r.departAt) / base);
+    before.push(valueOf(r, r.departAt - WINDOW, r.departAt) / base);
 
     // 同じ走行の、離脱前の区間から取った窓すべて。位置による偏りを避けるため全部使う
     for (let i = 0; i + WINDOW <= r.departAt - WINDOW; i++) {
       if (keep && !keep(r, i)) continue;
-      control.push(windowMean(series, i, i + WINDOW) / base);
+      control.push(valueOf(r, i, i + WINDOW) / base);
     }
   }
 
@@ -271,13 +318,15 @@ function compare(
 }
 
 console.log('\n  [草食の個体数] 谷で離脱するなら 直前 < 対照、位置が50%を下回る');
-for (const gain of gains) compare('草食', gain, (r) => r.pop);
+for (const gain of gains) compare('草食', gain, (r, a, b) => windowMean(r.pop, a, b));
 
 console.log('\n  [捕食者の個体数]');
-for (const gain of gains) compare('捕食者', gain, (r) => r.pred);
+for (const gain of gains) compare('捕食者', gain, (r, a, b) => windowMean(r.pred, a, b));
 
 console.log('\n  [捕食圧 = 捕食者 / 草食] 仮説Bなら 直前 > 対照、位置が50%を上回る');
-for (const gain of gains) compare('捕食圧', gain, (r) => r.pressure);
+for (const gain of gains) {
+  compare('捕食圧', gain, (r, a, b) => windowRatio(r.pred, r.pop, a, b));
+}
 
 /**
  * 切り分け。**草食が谷にある窓だけを対照にして**、捕食圧を比べる。
@@ -286,12 +335,36 @@ for (const gain of gains) compare('捕食圧', gain, (r) => r.pressure);
  * （12 で在来個体数・草・捕食者のどれで割っても勾配が出たのと同じ形）。
  * 谷を固定してなお捕食圧が高いなら仮説B、平らなら谷そのものが効いている。
  */
-console.log('\n  [草食が谷（下位33%）の窓だけに限った捕食圧]');
+/**
+ * 谷の絞り込みは**走行ごとの分位点**で取る。最初は固定の 0.85 で切ったが、
+ * 利得22 は振れ幅が小さく、その閾値を下回る対照窓が1つも無くて測れなかった。
+ * 閾値を世界の側の性質で決めてはいけない。
+ */
+const troughCut = new Map<number, number>();
+for (const r of runs) {
+  if (r.deadAt >= 0 || r.departAt < WINDOW * 2) continue;
+  const base = windowMean(r.pop, 0, r.departAt);
+  const xs: number[] = [];
+  for (let i = 0; i + WINDOW <= r.departAt - WINDOW; i++) {
+    xs.push(windowMean(r.pop, i, i + WINDOW) / base);
+  }
+  xs.sort((a, b) => a - b);
+  if (xs.length > 0) troughCut.set(r.seed * 100 + r.gain, xs[Math.floor(xs.length / 3)]);
+}
+
+console.log('\n  [草食が谷（その走行の下位33%）の窓だけに限った捕食圧]');
 for (const gain of gains) {
-  compare('捕食圧|谷', gain, (r) => r.pressure, (r, from) => {
-    const base = windowMean(r.pop, 0, r.departAt);
-    return base > 0 && windowMean(r.pop, from, from + WINDOW) / base < 0.85;
-  });
+  compare(
+    '捕食圧|谷',
+    gain,
+    (r, a, b) => windowRatio(r.pred, r.pop, a, b),
+    (r, from) => {
+      const cut = troughCut.get(r.seed * 100 + r.gain);
+      if (cut === undefined) return false;
+      const base = windowMean(r.pop, 0, r.departAt);
+      return base > 0 && windowMean(r.pop, from, from + WINDOW) / base <= cut;
+    },
+  );
 }
 
 await done(t0);
