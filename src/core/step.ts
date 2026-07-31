@@ -5,9 +5,12 @@ import type { SpeciesDef } from './types.ts';
  * 1ステップ進める。
  *
  * 順序に意味がある：
- *   草回復 → 移動 → 空間インデックス構築 → 捕食/採食 → 代謝と寿命 → 死亡個体を除去 → 繁殖
+ *   草回復 → 移動 → 空間インデックス構築 → 捕食/採食 → 代謝と寿命 → 大量死
+ *   → 死亡個体を除去 → 繁殖
  *
  * 移動してからインデックスを作るので、捕食判定は「移動後に同じセルにいるか」になる。
+ * 大量死を代謝の後・除去の前に置いたのは、その手番で死ぬ個体が採食と代謝を
+ * 済ませた後に消えるようにするため。繁殖より前なので、死んだ個体は子を残さない。
  */
 export function step(w: World): void {
   releaseDetritus(w);
@@ -16,9 +19,56 @@ export function step(w: World): void {
   w.buildSpatialIndex();
   feed(w);
   metabolize(w);
+  massDeath(w);
   w.compact();
   reproduce(w);
   w.stepCount++;
+}
+
+/**
+ * 無作為な大量死。平均 interval ステップに1回、対象の種の生存個体を
+ * fraction の確率で殺す。
+ *
+ * **形質を一切見ない。** 速度も年齢もエネルギーも参照しないので、速度の利得と
+ * 代償の釣り合い（[10](../../docs/reports/10-speed-evolution.md) の丘の位置）には
+ * 直接触れない。触るのは個体数だけ。丘を動かさずに谷を作るための軸なので、
+ * ここに選択性を入れたらこの軸の意味が無くなる。
+ *
+ * 乱数は世界本体とは別のストリームから引き、間隔か割合が0なら1つも引かない。
+ * 大量死を入れていない構成は、この機構を入れる前と完全に同じ乱数列をたどる。
+ *
+ * 死骸の還元は餓死・寿命死と同じ扱いにしてある。ただし corpseGrass > 0 の構成で
+ * 大量死を使うと、谷を作るのと同時に草へ大量のエネルギーを注ぐことになる
+ * （[08](../../docs/reports/08-corpse-recycling.md) で踏んだ交絡と同じ形）。
+ * 揺らぎだけを見たいなら還元は0にすること。
+ */
+function massDeath(w: World): void {
+  const killed = w.deathsDisturbance;
+  killed.fill(0);
+
+  const d = w.config.disturbance;
+  if (d === undefined || d.interval <= 0 || d.fraction <= 0) return;
+
+  const rng = w.disturbanceRng;
+  // 等間隔ではなく毎ステップ 1/interval で抽選する。等間隔だと振動と位相が
+  // 固定されて、大量死の効果とその位相で叩いた効果が分けられなくなる
+  if (!rng.chance(1 / d.interval)) return;
+
+  const target = w.disturbTarget;
+  const p = d.fraction;
+
+  for (let i = 0; i < w.count; i++) {
+    // 既にこのステップで死んでいる個体は数にも乱数にも数えない
+    if (w.aAlive[i] === 0) continue;
+    const si = w.aSpecies[i];
+    if (target[si] === 0) continue;
+    if (!rng.chance(p)) continue;
+
+    w.aAlive[i] = 0;
+    killed[si]++;
+    const def = w.defs[si];
+    if (def.corpseGrass > 0) dropCorpse(w, def.corpseGrass, def.corpseSpread, w.aX[i], w.aY[i]);
+  }
 }
 
 /**

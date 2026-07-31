@@ -190,7 +190,15 @@ export interface InvasionResult {
    * （= 在来が谷にいた区間）だけが抜けて最小値が上に偏るため。
    * 侵入者は多くても establishAt 体なので、在来への影響は数%に収まる。
    */
-  resident: { name: string; mean: number; sd: number; min: number; max: number }[];
+  resident: {
+    name: string;
+    mean: number;
+    sd: number;
+    min: number;
+    max: number;
+    /** 1ステップあたり大量死で取り除かれた数。つまみが設計どおり効いているかの確認用 */
+    killed: number;
+  }[];
   /**
    * warmup 以降の草の総量の平均。attempt.grass を比に直す基準に使う。
    * セル数ぶん舐めるので runOne と同じく間引いて取る
@@ -267,6 +275,7 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
   const sqSum = new Float64Array(n);
   const min = new Float64Array(n).fill(Infinity);
   const max = new Float64Array(n).fill(0);
+  const killedSum = new Float64Array(n);
   let samples = 0;
   let grassSum = 0;
   let grassSamples = 0;
@@ -292,6 +301,7 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
       sqSum[i] += c * c;
       if (c < min[i]) min[i] = c;
       if (c > max[i]) max[i] = c;
+      killedSum[i] += w.deathsDisturbance[i];
     }
     samples++;
     // 草はセル数ぶん舐めるので間引く。runOne と同じ刻み
@@ -383,6 +393,7 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
         sd: variance > 0 ? Math.sqrt(variance) : 0,
         min: min[i] === Infinity ? 0 : min[i],
         max: max[i],
+        killed: samples > 0 ? killedSum[i] / samples : 0,
       };
     }),
   };
@@ -413,6 +424,14 @@ export interface SpeciesResult {
   speedSd: number;
   /** 速度を実際に測れた回数。0 なら集計区間にこの種の個体がいなかった */
   speedSamples: number;
+  /**
+   * 1ステップあたり大量死で取り除かれた個体数（集計区間の平均）。
+   *
+   * 大量死は「1ステップあたりに取り除く割合」を揃えた組で比べる軸なので、
+   * 設計値どおりに取り除けているかを毎回確かめる必要がある。
+   * `killed / mean` が条件間で揃っていなければ、揺らぎ以外のものも動いている。
+   */
+  killed: number;
 }
 
 export interface RunResult {
@@ -458,6 +477,7 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
   const speedMeanSum = new Float64Array(n);
   const speedSdSum = new Float64Array(n);
   const speedSamples = new Float64Array(n);
+  const killedSum = new Float64Array(n);
 
   let samples = 0;
   let grassSum = 0;
@@ -488,6 +508,7 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
         sqSum[i] += c * c;
         if (c < min[i]) min[i] = c;
         if (c > max[i]) max[i] = c;
+        killedSum[i] += w.deathsDisturbance[i];
       }
       samples++;
       // 生産量は step が計算済みなので毎ステップ足しても安い
@@ -534,6 +555,7 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
       speedMean: speedSamples[i] > 0 ? speedMeanSum[i] / speedSamples[i] : def.speed,
       speedSd: speedSamples[i] > 0 ? speedSdSum[i] / speedSamples[i] : 0,
       speedSamples: speedSamples[i],
+      killed: samples > 0 ? killedSum[i] / samples : 0,
       };
     }),
   };

@@ -3,6 +3,9 @@ import type { WorldConfig } from '../core/types.ts';
 /** 世界の幅120と高さ90を割り切る値。パッチはトーラスの継ぎ目でつながる必要がある */
 const PATCH_SCALES = [5, 6, 10, 15, 30];
 
+/** 大量死の平均間隔。割合と組にして「割合÷間隔」を揃えられるよう、5倍刻みで並べてある */
+const DISTURB_INTERVALS = [20, 100, 500, 2500];
+
 /**
  * 種定義からスライダーを組み立てる。
  * 種を presets に足せばここは触らずにUIが増える。
@@ -26,6 +29,18 @@ export function buildControls(container: HTMLElement, config: WorldConfig): void
     (v) => (patch.scale = PATCH_SCALES[v]),
     undefined,
     (v) => String(PATCH_SCALES[v]));
+
+  // 無作為な大量死。割合0（既定）なら何も起きず、乱数も消費しない。
+  // 間隔と割合は別々に動かせるが、比べるときは割合÷間隔を揃えること
+  // （揃えないと平均個体数まで動く。types.ts の DisturbanceConfig 参照）
+  const dist = (config.disturbance ??= { interval: 100, fraction: 0 });
+  slider(env, '大量死の割合', 0, 0.8, 0.01, 2,
+    () => dist.fraction, (v) => (dist.fraction = v));
+  slider(env, '大量死の平均間隔', 0, DISTURB_INTERVALS.length - 1, 1, 0,
+    () => Math.max(0, DISTURB_INTERVALS.indexOf(dist.interval)),
+    (v) => (dist.interval = DISTURB_INTERVALS[v]),
+    undefined,
+    (v) => String(DISTURB_INTERVALS[v]));
 
   container.appendChild(env);
 
