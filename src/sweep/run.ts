@@ -198,6 +198,8 @@ export interface InvasionResult {
     max: number;
     /** 1ステップあたり大量死で取り除かれた数。つまみが設計どおり効いているかの確認用 */
     killed: number;
+    /** 1ステップあたり密度依存の死で取り除かれた個体数（集計区間の平均） */
+    crowded: number;
   }[];
   /**
    * warmup 以降の草の総量の平均。attempt.grass を比に直す基準に使う。
@@ -276,6 +278,7 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
   const min = new Float64Array(n).fill(Infinity);
   const max = new Float64Array(n).fill(0);
   const killedSum = new Float64Array(n);
+  const crowdedSum = new Float64Array(n);
   let samples = 0;
   let grassSum = 0;
   let grassSamples = 0;
@@ -302,6 +305,7 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
       if (c < min[i]) min[i] = c;
       if (c > max[i]) max[i] = c;
       killedSum[i] += w.deathsDisturbance[i];
+      crowdedSum[i] += w.deathsCrowding[i];
     }
     samples++;
     // 草はセル数ぶん舐めるので間引く。runOne と同じ刻み
@@ -394,6 +398,7 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
         min: min[i] === Infinity ? 0 : min[i],
         max: max[i],
         killed: samples > 0 ? killedSum[i] / samples : 0,
+        crowded: samples > 0 ? crowdedSum[i] / samples : 0,
       };
     }),
   };
@@ -432,6 +437,14 @@ export interface SpeciesResult {
    * `killed / mean` が条件間で揃っていなければ、揺らぎ以外のものも動いている。
    */
   killed: number;
+  /**
+   * 1ステップあたり密度依存の死で取り除かれた個体数（集計区間の平均）。
+   *
+   * self と all を比べるときは、**両者の合計がほぼ揃っていること**を必ず確かめる。
+   * 揃っていなければ「誰の密度を見るか」ではなく「どれだけ取り除いたか」の差を
+   * 見ていることになり、15 で潰したはずの交絡がそのまま戻る。
+   */
+  crowded: number;
 }
 
 export interface RunResult {
@@ -478,6 +491,7 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
   const speedSdSum = new Float64Array(n);
   const speedSamples = new Float64Array(n);
   const killedSum = new Float64Array(n);
+  const crowdedSum = new Float64Array(n);
 
   let samples = 0;
   let grassSum = 0;
@@ -509,6 +523,7 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
         if (c < min[i]) min[i] = c;
         if (c > max[i]) max[i] = c;
         killedSum[i] += w.deathsDisturbance[i];
+        crowdedSum[i] += w.deathsCrowding[i];
       }
       samples++;
       // 生産量は step が計算済みなので毎ステップ足しても安い
@@ -556,6 +571,7 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
       speedSd: speedSamples[i] > 0 ? speedSdSum[i] / speedSamples[i] : 0,
       speedSamples: speedSamples[i],
       killed: samples > 0 ? killedSum[i] / samples : 0,
+      crowded: samples > 0 ? crowdedSum[i] / samples : 0,
       };
     }),
   };

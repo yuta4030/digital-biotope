@@ -38,6 +38,12 @@ export interface Trial {
      * `killed / mean` が条件間で揃っていて初めて「揺らぎだけを動かした」と言える
      */
     killed: number;
+    /**
+     * 1ステップあたり密度依存の死で取り除かれた数。
+     * self と all の比較では、これの合計が揃っていて初めて
+     * 「誰の密度を見るかだけを変えた」と言える
+     */
+    crowded: number;
   }[];
   /** 崩壊した試行の絶滅ステップ */
   extinctAt: number[];
@@ -105,6 +111,7 @@ function summarize(total: number, rs: RunResult[]): Trial {
             : NaN,
         speedBySeed: speeds,
         killed: rs.reduce((a, r) => a + r.species[i].killed, 0) / total,
+        crowded: rs.reduce((a, r) => a + r.species[i].crowded, 0) / total,
       };
     }),
   };

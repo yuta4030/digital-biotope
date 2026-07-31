@@ -19,10 +19,63 @@ export function step(w: World): void {
   w.buildSpatialIndex();
   feed(w);
   metabolize(w);
+  crowdingDeath(w);
   massDeath(w);
   w.compact();
   reproduce(w);
   w.stepCount++;
+}
+
+/**
+ * 密度に比例した追加の死亡。負の頻度依存を手で書いたもの。
+ *
+ * 個体数は**このステップの死亡処理を始める前の値**で固定する（compact 前なので
+ * countBySpecies がその値を返す）。殺しながら数え直すと、走査順の早い個体ほど
+ * 高い密度で抽選されることになり、03 で踏んだ「走査順のバイアスが生態学的な
+ * 現象に見える」形の罠がそのまま再現する。
+ *
+ * 大量死より**前**に置いてある。順序を決めておかないと、両方を有効にしたときに
+ * 「大量死で減った後の個体数で密度を計算する」ことになり、2つの軸が掛け算で
+ * 絡む。前に置けば密度は大量死の影響を受けない。
+ *
+ * 乱数は世界本体とも大量死とも別のストリームから引き、crowding を持つ種が
+ * 無ければ1つも引かない。既存の構成の乱数列は変わらない。
+ */
+function crowdingDeath(w: World): void {
+  const killed = w.deathsCrowding;
+  killed.fill(0);
+  if (!w.anyCrowding) return;
+
+  const counts = w.crowdCounts;
+  w.countBySpecies(counts);
+
+  let total = 0;
+  for (let i = 0; i < counts.length; i++) total += counts[i];
+
+  // 種ごとの死亡確率を先に出しておく。個体ごとに割り算をやり直す必要はない
+  const prob = w.crowdProb;
+  prob.fill(0);
+  for (let si = 0; si < counts.length; si++) {
+    const c = w.defs[si].crowding;
+    if (c === undefined || c.rate <= 0) continue;
+    const n = c.scope === 'self' ? counts[si] : total;
+    prob[si] = c.rate * (n / w.cells);
+  }
+
+  const rng = w.crowdingRng;
+  for (let i = 0; i < w.count; i++) {
+    // 既にこのステップで死んでいる個体は数にも乱数にも数えない（大量死と同じ扱い）
+    if (w.aAlive[i] === 0) continue;
+    const si = w.aSpecies[i];
+    const p = prob[si];
+    if (p <= 0) continue;
+    if (!rng.chance(p)) continue;
+
+    w.aAlive[i] = 0;
+    killed[si]++;
+    const def = w.defs[si];
+    if (def.corpseGrass > 0) dropCorpse(w, def.corpseGrass, def.corpseSpread, w.aX[i], w.aY[i]);
+  }
 }
 
 /**

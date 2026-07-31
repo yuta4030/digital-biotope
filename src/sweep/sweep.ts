@@ -96,6 +96,7 @@ export async function runSweep(
         max: Math.max(...results.map((r) => r.species[i].max)),
         sd: avg(results.map((r) => r.species[i].sd)),
         killed: avg(results.map((r) => r.species[i].killed)),
+        crowded: avg(results.map((r) => r.species[i].crowded)),
         // 測れた試行だけで平均する。絶滅した試行の定義値を混ぜると
         // 初期速度に引き寄せられた偽の数字になる
         ...speedOver(results.map((r) => r.species[i])),

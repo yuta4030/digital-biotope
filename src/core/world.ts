@@ -87,6 +87,15 @@ export class World {
    * ずれていないかを確かめるための量で、混ぜると確かめられなくなる。
    */
   readonly deathsDisturbance: Int32Array;
+  /**
+   * 密度依存の死で取り除いた数。種インデックス別で、毎ステップ上書きする。
+   *
+   * 大量死（deathsDisturbance）と混ぜない。この2つは同じ「形質を見ない死」でも、
+   * 一方は密度に比例し他方はしないので、混ぜると **同じ量を取り除いたのか**を
+   * 確かめられなくなる。self と all の比較はまさにそれを揃える比較なので、
+   * ここが分かれていないと実験そのものが成り立たない。
+   */
+  readonly deathsCrowding: Int32Array;
 
   /**
    * 大量死の対象かどうか。種インデックス別に 1/0。
@@ -100,6 +109,18 @@ export class World {
    * パッチ場（buildPatchField）・侵入（run.ts）と同じ理由で同じ手を使っている。
    */
   readonly disturbanceRng: Rng;
+  /**
+   * 密度依存の死用の乱数。大量死ともまた別のストリーム。
+   * 同じ流れから引くと、片方を有効にした瞬間にもう片方の抽選がずれる。
+   * self と all を比べるときは両者が同じ乱数列をたどっていてほしいので、
+   * ここを共有させてはいけない。
+   */
+  readonly crowdingRng: Rng;
+  /** crowding を持つ種が1つでもあるか。無ければ毎ステップの走査ごと飛ばす */
+  readonly anyCrowding: boolean;
+  /** 密度依存の死で使う作業配列。step.ts から使うので private にしない */
+  readonly crowdCounts: Int32Array;
+  readonly crowdProb: Float64Array;
 
   // --- エージェント ---
   readonly capacity: number;
@@ -189,6 +210,11 @@ export class World {
       }
     }
     this.disturbanceRng = new Rng((config.seed ^ 0x7c9e3b21) >>> 0);
+    this.deathsCrowding = new Int32Array(n);
+    this.anyCrowding = this.defs.some((d) => d.crowding !== undefined && d.crowding.rate > 0);
+    this.crowdingRng = new Rng((config.seed ^ 0x51ab7d0f) >>> 0);
+    this.crowdCounts = new Int32Array(n);
+    this.crowdProb = new Float64Array(n);
     this.speedSum = new Float64Array(n);
     this.speedSqSum = new Float64Array(n);
     this.speedCount = new Float64Array(n);
