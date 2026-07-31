@@ -3,6 +3,7 @@
 食物連鎖のシミュレータ。「どういう条件なら多様な生態系が成り立つのか」を
 実験で確かめていくのが目的で、動くものを作ること自体は目的ではない。
 
+- **全体像: [docs/OVERVIEW.md](docs/OVERVIEW.md)** — 何が分かっていて、何が穴なのか。最初に読む
 - 使い方とモデル: [README.md](README.md)
 - 実験の記録: [docs/reports/](docs/reports/)
 - **これからの方針: [docs/DIRECTION.md](docs/DIRECTION.md)** — 何を目指していて、次に何をやるか
