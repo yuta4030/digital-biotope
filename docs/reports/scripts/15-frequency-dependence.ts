@@ -20,7 +20,7 @@
  */
 import type { WorldConfig } from '../../../src/core/types.ts';
 import { presets } from '../../../src/core/presets.ts';
-import { banner, done, group, header, line, trials, mark, fmt } from './_lib.ts';
+import { banner, done, group, header, line, trials, mark, fmt, type Trial } from './_lib.ts';
 
 // 14 と同じ 8シード。8000ステップ / 後半4000ステップも 02・14 に揃える
 const SEEDS8 = [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000];
@@ -63,6 +63,22 @@ function withDeath(interval: number, fraction: number): WorldConfig {
   const cfg = noPredator();
   cfg.disturbance = { interval, fraction };
   return cfg;
+}
+
+/**
+ * 1ステップあたり大量死で取り除いた数。設計値どおりに削れているかの確認用。
+ *
+ * これを出さないと「大量死が効かなかった」と「大量死が起きていなかった」が
+ * 区別できない。14 自身が「設計上の割合と実現値がずれていないかを毎回確かめること」と
+ * 書いているのに、最初はこれを出し忘れていた。
+ *
+ * 統計は後半ぶんだけなので、Bが早々に絶滅する条件では **Aを削っている量しか
+ * 見えない**。それでも「大量死が起きている」の確認にはなる。
+ */
+function killedLine(t: Trial): string {
+  const each = t.species.map((s) => `${s.name.slice(0, 4)} ${s.killed.toFixed(2)}`).join('  ');
+  const total = t.species.reduce((a, s) => a + s.killed, 0);
+  return `除去/歩 計 ${total.toFixed(2)}  (${each})`;
 }
 
 /** 絶滅の早さ。「共存した」と「排除が遅い」を分けるので中央値まで出す */
@@ -114,6 +130,7 @@ async function main(): Promise<void> {
     const r = (s.fraction / s.interval).toFixed(4);
     line(`${s.interval}歩×${(s.fraction * 100).toFixed(0)}%  r=${r}`, t);
     console.log(`  ${''.padEnd(26)} ${extinctSummary(t.extinctAt, SEEDS8.length)}`);
+    console.log(`  ${''.padEnd(26)} ${killedLine(t)}`);
   });
 
   // --- 節3. 均等な死・塊の大きさを振る ---
@@ -135,6 +152,7 @@ async function main(): Promise<void> {
     const t = chunkTrials[i];
     line(`${c.interval}歩×${(c.fraction * 100).toFixed(0)}%`, t);
     console.log(`  ${''.padEnd(26)} ${extinctSummary(t.extinctAt, SEEDS8.length)}`);
+    console.log(`  ${''.padEnd(26)} ${killedLine(t)}`);
   });
 
   // --- 節4. 長い走行 ---
@@ -159,6 +177,7 @@ async function main(): Promise<void> {
         `  ${c.label.padEnd(20)} ${mark(t)}${t.survived}/${t.total}  ${fmt(t)}`,
       );
       console.log(`  ${''.padEnd(20)} ${extinctSummary(t.extinctAt, SEEDS8.length)}`);
+      console.log(`  ${''.padEnd(20)} ${killedLine(t)}`);
     },
     { seeds: SEEDS8, steps: LONG, tail: LONG_TAIL },
   );
