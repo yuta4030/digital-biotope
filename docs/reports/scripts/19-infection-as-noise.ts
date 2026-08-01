@@ -124,35 +124,44 @@ async function main(): Promise<void> {
   // --- 節3. 対照 ---
   header('3. 対照 — 同じ量を無作為に取り除く');
   console.log('  節2で実際に取り除かれた割合に合わせて、14 の大量死（草食のみ）を当てる。');
-  console.log('  同じ量を抜いて谷の深さが揃うなら、密度依存も流行の周期も効いていない。\n');
+  console.log();
+  console.log('  **間隔1歩で当てる。** 病原体は毎ステップ少しずつ殺すので、');
+  console.log('  100歩に1回まとめて叩く形と比べると、変わったのが「密度依存かどうか」');
+  console.log('  ではなく「塊の大きさ」になる。14 は塊が谷の深さを決めると言っている。');
+  console.log('  塊の効果そのものを見るために、100歩版も並べる。\n');
 
-  // 最も強い条件と中くらいの条件の実現値に合わせる
-  const targets = [infTrials[1], infTrials[3]].map(removalRate);
-  const controls = targets.map((r) => ({ r, interval: 100, fraction: r * 100 }));
-  controls.forEach((c, i) => {
+  const rates = [removalRate(infTrials[1]), removalRate(infTrials[3])];
+  const controls = [
+    { label: '対照1a 毎歩', tr: 0.6, r: rates[0], interval: 1 },
+    { label: '対照2a 毎歩', tr: 1.0, r: rates[1], interval: 1 },
+    { label: '対照1b 100歩', tr: 0.6, r: rates[0], interval: 100 },
+  ];
+  controls.forEach((c) => {
+    const f = c.r * c.interval;
     console.log(
-      `  対照${i + 1}: 節2の transmit=${i === 0 ? 0.6 : 1.0} の実現除去率 ` +
-        `${(c.r * 100).toFixed(2)}%/歩 に合わせる → 100歩×${(c.fraction * 100).toFixed(1)}%`,
+      `  ${c.label}: 節2 transmit=${c.tr} の実現除去率 ${(c.r * 100).toFixed(2)}%/歩` +
+        ` → ${c.interval}歩×${(f * 100).toFixed(2)}%`,
     );
   });
   console.log();
 
   const ctrlTrials = await trials(
-    controls.map((c) => () => withDeath(c.interval, c.fraction)),
+    controls.map((c) => () => withDeath(c.interval, c.r * c.interval)),
     { seeds: SEEDS8, steps: STEPS, tail: TAIL },
   );
-  ctrlTrials.forEach((t, i) => report(`対照${i + 1} 大量死`, t));
+  ctrlTrials.forEach((t, i) => report(controls[i].label, t));
 
   // --- 節4. 突き合わせ ---
   header('4. 突き合わせ');
-  console.log('  同じ除去率で、病原体と無作為な死のどちらが深い谷を作るか。\n');
+  console.log('  同じ除去率・同じ削り方で、病原体と無作為な死のどちらが深い谷を作るか。\n');
   const pairs: [string, Trial, string, Trial][] = [
-    ['感染 tr=0.6', infTrials[1], '対照1', ctrlTrials[0]],
-    ['感染 tr=1.0', infTrials[3], '対照2', ctrlTrials[1]],
+    ['感染 tr=0.6', infTrials[1], controls[0].label, ctrlTrials[0]],
+    ['感染 tr=1.0', infTrials[3], controls[1].label, ctrlTrials[1]],
+    ['感染 tr=0.6', infTrials[1], controls[2].label, ctrlTrials[2]],
   ];
   for (const [la, ta, lb, tb] of pairs) {
-    console.log(`  ${la.padEnd(12)} 除去 ${(removalRate(ta) * 100).toFixed(2)}%/歩  ${noise(ta, HERBIVORE)}  速度 ${speedOf(ta, HERBIVORE)}`);
-    console.log(`  ${lb.padEnd(12)} 除去 ${(removalRate(tb) * 100).toFixed(2)}%/歩  ${noise(tb, HERBIVORE)}  速度 ${speedOf(tb, HERBIVORE)}`);
+    console.log(`  ${la.padEnd(14)} 除去 ${(removalRate(ta) * 100).toFixed(2)}%/歩  ${noise(ta, HERBIVORE)}  速度 ${speedOf(ta, HERBIVORE)}`);
+    console.log(`  ${lb.padEnd(14)} 除去 ${(removalRate(tb) * 100).toFixed(2)}%/歩  ${noise(tb, HERBIVORE)}  速度 ${speedOf(tb, HERBIVORE)}`);
     console.log();
   }
 
