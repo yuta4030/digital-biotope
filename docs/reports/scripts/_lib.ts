@@ -44,6 +44,11 @@ export interface Trial {
      * 「誰の密度を見るかだけを変えた」と言える
      */
     crowded: number;
+    /**
+     * 感染症の測定値。contact と spontaneous を分けて見ること。
+     * 自然発生が主なら、密度に依存しない死＝15 で潰した均等な死をやっているだけ
+     */
+    infection: { infected: number; deaths: number; contact: number; spontaneous: number };
   }[];
   /** 崩壊した試行の絶滅ステップ */
   extinctAt: number[];
@@ -112,6 +117,12 @@ function summarize(total: number, rs: RunResult[]): Trial {
         speedBySeed: speeds,
         killed: rs.reduce((a, r) => a + r.species[i].killed, 0) / total,
         crowded: rs.reduce((a, r) => a + r.species[i].crowded, 0) / total,
+        infection: {
+          infected: rs.reduce((a, r) => a + r.species[i].infection.infected, 0) / total,
+          deaths: rs.reduce((a, r) => a + r.species[i].infection.deaths, 0) / total,
+          contact: rs.reduce((a, r) => a + r.species[i].infection.contact, 0) / total,
+          spontaneous: rs.reduce((a, r) => a + r.species[i].infection.spontaneous, 0) / total,
+        },
       };
     }),
   };

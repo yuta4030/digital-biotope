@@ -19,11 +19,104 @@ export function step(w: World): void {
   w.buildSpatialIndex();
   feed(w);
   metabolize(w);
+  infection(w);
   crowdingDeath(w);
   massDeath(w);
   w.compact();
   reproduce(w);
   w.stepCount++;
+}
+
+/**
+ * 接触で伝わる感染症。負の頻度依存を**機構として**書いたもの。
+ *
+ * 頻度依存を手で書かないのが要点。見るのは「同じセルに感染個体が何体いるか」だけで、
+ * 種の個体数はどこにも出てこない。それでも増えた種ほど同型との遭遇が増えるので、
+ * 1個体あたりの感染リスクが自分の密度に応じて上がる。
+ *
+ * 空間インデックスが要るので、buildSpatialIndex より後・compact より前に呼ぶ。
+ * feed で食われた個体は aAlive が0になっているが index には残っているので、
+ * 伝染源にも感染先にもしない。
+ *
+ * 処理は3段に分かれている。順序を混ぜると測っているものが変わる：
+ *   1. 伝染と自然発生を **aInfectedNext に書く**（このステップの伝染源は増やさない）
+ *   2. **その時点で感染していた個体**だけが死亡・回復の抽選を受ける
+ *   3. 状態を入れ替える
+ *
+ * 2 を 1 より後に置いても、読むのは常に古い状態（aInfected）なので、
+ * 個体の走査順は結果に影響しない。ここは 03 で3回踏んだ場所なので、
+ * 「順番を変えても同じ」が成り立つ形にしてある。
+ */
+function infection(w: World): void {
+  const deaths = w.deathsInfection;
+  const byContact = w.infectedByContact;
+  const bySpont = w.infectedBySpontaneous;
+  deaths.fill(0);
+  byContact.fill(0);
+  bySpont.fill(0);
+  if (!w.anyInfection) return;
+
+  const rng = w.infectionRng;
+  const count = w.count;
+  const next = w.aInfectedNext;
+  const cur = w.aInfected;
+
+  // --- 1. 伝染と自然発生 ---
+  for (let i = 0; i < count; i++) {
+    next[i] = cur[i];
+    if (w.aAlive[i] === 0) continue;
+
+    const si = w.aSpecies[i];
+    const inf = w.defs[si].infection;
+    if (inf === undefined) continue;
+    if (cur[i] === 1) continue; // 既に感染している
+
+    // 同じセルの感染個体を数える。scope が self なら同種だけ
+    let k = 0;
+    const c = w.aY[i] * w.width + w.aX[i];
+    const end = w.cellStart[c + 1];
+    for (let p = w.cellStart[c]; p < end; p++) {
+      const j = w.cellAgents[p];
+      if (j === i || w.aAlive[j] === 0 || cur[j] === 0) continue;
+      if (inf.scope === 'self' && w.aSpecies[j] !== si) continue;
+      k++;
+    }
+
+    if (k > 0 && inf.transmit > 0) {
+      // k体それぞれが独立に伝染させる。1回ずつ引くと k に比例して乱数の
+      // 消費数が変わるので、まとめて 1 - (1-p)^k で1回だけ引く
+      if (rng.chance(1 - Math.pow(1 - inf.transmit, k))) {
+        next[i] = 1;
+        byContact[si]++;
+        continue;
+      }
+    }
+    if (inf.spontaneous > 0 && rng.chance(inf.spontaneous)) {
+      next[i] = 1;
+      bySpont[si]++;
+    }
+  }
+
+  // --- 2. 死亡と回復（このステップの頭で感染していた個体だけ） ---
+  for (let i = 0; i < count; i++) {
+    if (w.aAlive[i] === 0 || cur[i] === 0) continue;
+    const si = w.aSpecies[i];
+    const inf = w.defs[si].infection;
+    if (inf === undefined) continue;
+
+    if (inf.lethality > 0 && rng.chance(inf.lethality)) {
+      w.aAlive[i] = 0;
+      next[i] = 0;
+      deaths[si]++;
+      const def = w.defs[si];
+      if (def.corpseGrass > 0) dropCorpse(w, def.corpseGrass, def.corpseSpread, w.aX[i], w.aY[i]);
+      continue;
+    }
+    if (inf.recover > 0 && rng.chance(inf.recover)) next[i] = 0;
+  }
+
+  // --- 3. 状態の入れ替え ---
+  cur.set(next.subarray(0, count));
 }
 
 /**

@@ -97,6 +97,12 @@ export async function runSweep(
         sd: avg(results.map((r) => r.species[i].sd)),
         killed: avg(results.map((r) => r.species[i].killed)),
         crowded: avg(results.map((r) => r.species[i].crowded)),
+        infection: {
+          infected: avg(results.map((r) => r.species[i].infection.infected)),
+          deaths: avg(results.map((r) => r.species[i].infection.deaths)),
+          contact: avg(results.map((r) => r.species[i].infection.contact)),
+          spontaneous: avg(results.map((r) => r.species[i].infection.spontaneous)),
+        },
         // 測れた試行だけで平均する。絶滅した試行の定義値を混ぜると
         // 初期速度に引き寄せられた偽の数字になる
         ...speedOver(results.map((r) => r.species[i])),
