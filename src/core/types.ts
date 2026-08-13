@@ -238,6 +238,74 @@ export interface GrassPatchConfig {
   contrast: number;
 }
 
+/**
+ * 地形。**移動の代償**をセルごとに変える。
+ *
+ * [07](../../docs/reports/07-grass-patches.md) の `GrassPatchConfig` が変えたのは
+ * 資源の分布で、これは**形質を使う代償の分布**。別物として足してある。
+ *
+ * 07が効かなかった理由は「不均質さは軸を作ったが、全員が同じ規則で良い場所へ寄るので
+ * 重複が増えた」だった。環境が軸になるのは**誰がどこを得意とするかが違う**ときだけで、
+ * 07にはその差が無い（草食2種は同じ規則で草を探す）。
+ *
+ * 地形が `target: 'speed'` で入ると、その差は種ごとに書かなくても形質から出る：
+ *
+ *   実効代謝 = metabolism + speedCost × speed × w(cell) + visionCost × vision
+ *
+ * 速度の**限界代償** `∂(実効代謝)/∂speed = speedCost × w` がセルによって違うので、
+ * 速い個体と遅い個体で得意な場所が入れ替わる。
+ * [10](../../docs/reports/10-speed-evolution.md) の目型（速度0.78）と足型（2.45）を
+ * 分ける軸になりうる。
+ *
+ * 倍率の平均はちょうど1に正規化されるので、**世界全体の名目コストは変わらない**。
+ * 07のパッチが生産量を固定したのと同じ理由で、これを外すと
+ * 「不均質にした効果」と「代謝を上下させた効果」が混ざる。
+ *
+ * ただし**実現値は1にならないことがある**。個体が地形に偏って分布すれば
+ * 実際に支払われる平均倍率はずれる。World が `terrainCostPaid` と
+ * `terrainCostFlat` を別々に数えているので、必ず比を確かめること
+ * （[08](../../docs/reports/08-corpse-recycling.md) で `grassAdded` と
+ * `grassFromCorpses` を分けたのと同じ理由）。
+ *
+ * 省略すると全セルの倍率が1で、掛け算そのものを省くので既存の結果は変わらない。
+ */
+export interface TerrainConfig {
+  /** 地形の大きさ（セル）。世界の幅と高さを割り切ること。GrassPatchConfig と同じ生成器 */
+  scale: number;
+  /**
+   * 起伏の強さ (0-1)。0なら平坦。
+   * 倍率は最も平らなセルで `1-contrast`、最も険しいセルで `1+contrast`。
+   */
+  contrast: number;
+  /**
+   * 倍率をどの項に掛けるか。
+   *
+   * - `speed` — **移動コストの項**（`speedCost × speed`）。速度の限界代償が
+   *   場所によって変わるので、速い個体と遅い個体で得意な場所が分かれる
+   * - `base` — **基礎代謝の項**（`metabolism`）。**対照**。場と生成器と
+   *   コストのばらつきは同じまま、`∂(実効代謝)/∂speed` が `speedCost` で
+   *   一定になるので**形質との結合だけが消える**。ここで差が出なければ、
+   *   効いているのは形質の差異化ではなく単に不均質にしたこと
+   *
+   * 対照として使うときは**実効代謝のばらつきの大きさを揃える**こと。
+   * 同じ contrast だと振れ幅が `speedCost × speed` 対 `metabolism` で違う。
+   */
+  target: 'speed' | 'base';
+  /**
+   * 地形を適用する種の id。省略すると全種。
+   *
+   * **省略してはいけない場合がある。** 全種に掛けると捕食者の移動コストも
+   * 不均質になり、実現倍率が1を割るぶん捕食者が安くなる。捕食者が増えれば
+   * 捕食圧が上がり、[10](../../docs/reports/10-speed-evolution.md) が示したとおり
+   * 速度の丘そのものが動く。20 の第1回はこれを踏んで、
+   * 「地形が丘を動かした」と「捕食圧が丘を動かした」を分けられなかった。
+   *
+   * [14](../../docs/reports/14-mass-death.md) の大量死がまったく同じ形で躓き、
+   * 対象を草食だけに絞って解決している。同じ理由で同じ形の逃げ道を用意してある。
+   */
+  species?: number[];
+}
+
 export interface GrassConfig {
   /** セルあたりの草の最大量 */
   max: number;
@@ -310,6 +378,8 @@ export interface WorldConfig {
   maxAgents: number;
   /** 無作為な大量死。省略すると何も起きない（既定） */
   disturbance?: DisturbanceConfig;
+  /** 移動の代償の空間的な不均質。省略か contrast=0 なら平坦（既定） */
+  terrain?: TerrainConfig;
 }
 
 /** 1ステップ分の統計 */

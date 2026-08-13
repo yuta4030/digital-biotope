@@ -1,0 +1,366 @@
+/**
+ * 21. R* — 1本の資源軸で勝敗を決めているものは何か
+ *
+ * [20](../20-terrain.md) が塞いだのは「空間の不均質さ」の道だった。残るのは
+ * **ニッチ軸そのものを増やすこと**で、その設計に入る前に測っておく道具がこれ。
+ *
+ * R* は「その種が単独で資源をどこまで引き下げられるか」。1本の資源をめぐる競争では、
+ * **R* の低いほうが勝つ**——相手がもう減り始める水準でまだ増えられるので。
+ * 資源を2本にして共存させたいなら、**種ごとに R* の低い資源が違う**必要がある。
+ *
+ * だから先に確かめる。**いまの1資源の模型で、R* が実際に勝敗を予測するのか。**
+ * 予測しないなら、2本にしたところで設計の根拠が無い。
+ *
+ * この模型の採食は `eaten = min(セルの草, gainFromGrass)` で、`gainFromGrass` は4、
+ * 標準現存量は約1。**個体はセルの草を丸ごと食べていて、食べる能力は効いていない。**
+ * だとすると摂取を決めるのは遭遇だけなので、平衡では
+ *
+ *     標準現存量 ≒ 回復速度 ÷ 密度 、 密度 ≒ 回復速度 ÷ 実効代謝
+ *     → **R\* ≒ 実効代謝**
+ *
+ * になるはず。予想はこれ。当たっていれば「1資源の勝敗は実効代謝だけで決まる」
+ * ことになり、**資源を2本にしても `gainFromGrass` を変えるだけでは
+ * トレードオフにならない**（能力が効いていないので）。設計が変わる。
+ *
+ * 予想:
+ * 1. R* ≒ 実効代謝。代謝を振ると比例して動く
+ * 2. 競合ペアでは R* の低いほうが勝つ。
+ *    keystone は A(0.5) が B(0.62) に勝つ（02 の A 1298 / B 0）、
+ *    upkeep は無警戒型(0.40) が警戒型(0.475) に勝つ（05 の 477 対 1056）
+ * 3. 視野コストを振ると実効代謝の大小が入れ替わり、勝敗も同じ点で反転する
+ *
+ * 実行: node docs/reports/scripts/21-r-star.ts
+ */
+import { presetByKey } from '../../../src/core/presets.ts';
+import type { WorldConfig, SpeciesDef } from '../../../src/core/types.ts';
+import { trial, header, done, banner, mark } from './_lib.ts';
+
+const t0 = performance.now();
+banner();
+
+const SEEDS = [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000];
+const STEPS = 6000;
+const TAIL = 3000;
+/**
+ * `Trial.grassMean` は草の**総量**なのでセル数で割る。
+ * 最初これをセルあたりと読み違えて、R* を4桁の値として出していた。
+ */
+const CELLS = 120 * 90;
+const perCell = (total: number) => total / CELLS;
+
+/** 実効代謝 = 基礎代謝 + 速度コスト × 速度 + 視野コスト × 視野 */
+function effOf(s: SpeciesDef): number {
+  return s.metabolism + s.speedCost * s.speed + s.visionCost * s.visionRange;
+}
+
+/**
+ * 指定した id の種だけを残す。**捕食者も競争相手も消す**ので、
+ * 残った草の量はその種が単独で引き下げられる水準そのものになる。
+ */
+function only(key: string, id: number, edit?: (s: SpeciesDef) => void): () => WorldConfig {
+  return () => {
+    const cfg = presetByKey(key).build();
+    cfg.species = cfg.species.filter((s) => s.id === id);
+    if (edit) edit(cfg.species[0]);
+    return cfg;
+  };
+}
+
+/** 草食2種だけを残す。捕食者を消すのは、捕食が共存を作る側だから（キーストーン捕食） */
+function pair(key: string, ids: number[], edit?: (s: SpeciesDef) => void): () => WorldConfig {
+  return () => {
+    const cfg = presetByKey(key).build();
+    cfg.species = cfg.species.filter((s) => ids.includes(s.id));
+    if (edit) cfg.species.forEach(edit);
+    return cfg;
+  };
+}
+
+// ---------------------------------------------------------------------------
+header('節1: R* は実効代謝と一致するか');
+
+/**
+ * 単独で走らせて、平衡での草の残量を測る。これが R*。
+ *
+ * 代謝を振って、R* が実効代謝についてくるかを見る。ついてくるなら
+ * 「1資源の勝敗は実効代謝だけで決まる」ことになる。
+ */
+console.log('  keystone の草食A を単独で。基礎代謝を振る  8シード / 6000ステップ');
+for (const m of [0.4, 0.5, 0.62, 0.8]) {
+  const build = only('keystone', 1, (s) => (s.metabolism = m));
+  const eff = effOf(build().species[0]);
+  const t = await trial(build, { seeds: SEEDS, steps: STEPS, tail: TAIL });
+  console.log(
+    `    代謝${m.toFixed(2)}  実効代謝 ${eff.toFixed(3)}  ` +
+      `${mark(t)}${t.survived}/${t.total}  ` +
+      `R* ${perCell(t.grassMean).toFixed(3)}  R*/実効代謝 ${(perCell(t.grassMean) / eff).toFixed(2)}  ` +
+      `個体数 ${t.species[0].mean.toFixed(0)}`,
+  );
+}
+
+console.log('  upkeep の2種を単独で（違いは視野だけ）');
+for (const [key, id] of [['upkeep', 1], ['upkeep', 2]] as const) {
+  const build = only(key, id);
+  const s0 = build().species[0];
+  const t = await trial(build, { seeds: SEEDS, steps: STEPS, tail: TAIL });
+  console.log(
+    `    ${s0.name.padEnd(12)} 実効代謝 ${effOf(s0).toFixed(3)}  ` +
+      `${mark(t)}${t.survived}/${t.total}  ` +
+      `R* ${perCell(t.grassMean).toFixed(3)}  R*/実効代謝 ${(perCell(t.grassMean) / effOf(s0)).toFixed(2)}  ` +
+      `個体数 ${t.species[0].mean.toFixed(0)}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+header('節2: R* の低いほうが勝つか');
+
+/**
+ * 単独で測った R* が、実際に一緒に走らせたときの勝敗を予測するか。
+ * 予測しないなら、資源を2本にしても設計の根拠が無い。
+ *
+ * 既知の答えと突き合わせる。keystone は 02 で A 1298 / B 0、
+ * upkeep は 05 で 477 対 1056（どちらも捕食者なし）。
+ */
+for (const [key, ids, label] of [
+  ['keystone', [1, 2], 'keystone 草食A vs 草食B'],
+  ['upkeep', [1, 2], 'upkeep 警戒型 vs 無警戒型'],
+] as const) {
+  const cfg = pair(key, [...ids])();
+  const effs = cfg.species.map(effOf);
+  const t = await trial(pair(key, [...ids]), { seeds: SEEDS, steps: STEPS, tail: TAIL });
+  console.log(`  ${label}`);
+  console.log(
+    `    実効代謝 ${cfg.species.map((s, i) => `${s.name} ${effs[i].toFixed(3)}`).join(' / ')}`,
+  );
+  console.log(
+    `    同居させると  ${t.species
+      .map((s) => `${s.name} ${s.mean.toFixed(0)}(${s.min}-${s.max})`)
+      .join('  ')}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+header('節3: 実効代謝が入れ替わる点で勝敗も反転するか');
+
+/**
+ * upkeep の警戒型は視野3なので、視野コストを振ると実効代謝だけが動く。
+ * 無警戒型は視野0なので**視野コストの影響を受けない**——片方だけを動かせる。
+ *
+ * 警戒型の実効代謝 = 0.40 + 視野コスト × 3。無警戒型は 0.40 で固定。
+ * つまり視野コスト > 0 なら常に警戒型のほうが高い。**負の視野コストは無いので、
+ * この軸では入れ替わらない**——予想3はそもそも成り立たない可能性がある。
+ *
+ * 代わりに無警戒型の基礎代謝を上げて入れ替える。視野コスト0.025のとき
+ * 警戒型 0.475 なので、無警戒型の基礎代謝を 0.25 → 0.325 に上げると並ぶ。
+ * **R* が勝敗を決めているなら、反転はちょうどそこで起きる。**
+ */
+console.log('  無警戒型の基礎代謝を上げて実効代謝を追い越させる（警戒型は0.475で固定）');
+for (const m of [0.25, 0.3, 0.325, 0.35, 0.4]) {
+  const build = pair('upkeep', [1, 2], (s) => {
+    if (s.id === 2) s.metabolism = m;
+  });
+  const cfg = build();
+  const effs = cfg.species.map(effOf);
+  const t = await trial(build, { seeds: SEEDS, steps: STEPS, tail: TAIL });
+  const [alert, plain] = t.species;
+  console.log(
+    `    無警戒の代謝${m.toFixed(3)}  実効代謝 警戒${effs[0].toFixed(3)} / 無警戒${effs[1].toFixed(3)}  ` +
+      `→  警戒 ${alert.mean.toFixed(0).padStart(4)}(${alert.min}-${alert.max})  ` +
+      `無警戒 ${plain.mean.toFixed(0).padStart(4)}(${plain.min}-${plain.max})`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+header('節4: 6000ステップは遅い排除を隠していないか');
+
+/**
+ * 節2・節3 で upkeep のペアが排除されなかったが、R* は 2.577 対 0.528 で
+ * **4.9倍違う**。1本の資源しか制限要因が無いなら、これで共存はできない。
+ *
+ * まず疑うのは走行の長さ。[14](../14-mass-death.md) が
+ * 「8000ステップで 8/8 だった条件が90000ステップでは 2/8」を踏んでいる。
+ * 使う予定の長さで確かめる、が規則。
+ */
+console.log('  upkeep 警戒型 vs 無警戒型（捕食者なし）  8シード');
+for (const steps of [6000, 30000]) {
+  const t = await trial(pair('upkeep', [1, 2]), {
+    seeds: SEEDS,
+    steps,
+    tail: Math.floor(steps / 2),
+  });
+  console.log(
+    `    ${String(steps).padStart(5)}ステップ  ${mark(t)}${t.survived}/${t.total}  ` +
+      t.species.map((s) => `${s.name} ${s.mean.toFixed(0)}(${s.min}-${s.max})`).join('  ') +
+      (t.extinctAt.length > 0 ? `  絶滅 ${t.extinctAt.join(',')}` : ''),
+  );
+}
+
+// ---------------------------------------------------------------------------
+header('節5: 相互に侵入できるか');
+
+/**
+ * **共存の定義そのもの。** 片方が平衡にいるところへ相手を少数だけ入れて、
+ * 増えるか。両方向で増えるなら共存、片方向だけなら途中経過（遅い排除）。
+ *
+ * 初期個体数を 5 にして、相手は既定の300から始める。少数から増えられるかを
+ * 見たいので、[12](../12-invasion.md) と同じく「増えるかどうか」であって
+ * 「勝つかどうか」ではない。
+ */
+console.log('  片方を5体から始める（相手は300体）  8シード / 30000ステップ');
+for (const invader of [1, 2]) {
+  const build = pair('upkeep', [1, 2], (s) => {
+    s.initialCount = s.id === invader ? 5 : 300;
+  });
+  const name = build().species.find((s) => s.id === invader)!.name;
+  const t = await trial(build, { seeds: SEEDS, steps: 30000, tail: 15000 });
+  console.log(
+    `    ${name}が侵入  ${mark(t)}${t.survived}/${t.total}  ` +
+      t.species.map((s) => `${s.name} ${s.mean.toFixed(0)}(${s.min}-${s.max})`).join('  '),
+  );
+}
+
+// ---------------------------------------------------------------------------
+header('節6: 2種は同じ草を食べているか');
+
+/**
+ * 見立ては「**平均 対 上側の裾**」。無警戒型は草の平均に制限されるが、
+ * 警戒型は豊かなセルを選んで食べるので分布の上側に制限される。
+ * 同じ資源でも制限されている量が違うなら、それは制限要因が2つあるということ。
+ *
+ * 直接の証拠として、**1回の採食で取れた量**を種別に測る。採食量の上限(4)より
+ * 残量(約1)のほうが小さいので、これは実質「食べた瞬間のセルの草」。
+ *
+ * **step の外からは測れない。** 最初はステップ後に個体のいるセルを見たが、
+ * 個体は自分のセルを食べ切るので両種とも 0.000 になった。
+ * World に採食の計器（grazeAmount / grazeCount）を足してある。
+ *
+ * 注意: これは相関であって機構ではない。視野で濃いセルへ寄っているのか、
+ * たまたま濃いところで食べているのかは、この数字だけでは区別できない。
+ */
+const { World } = await import('../../../src/core/world.ts');
+const { step } = await import('../../../src/core/step.ts');
+
+console.log('  1回の採食で取れた量 vs 世界平均  4シード / 10000ステップ / 後半2000で集計');
+{
+  const amount = [0, 0];
+  const events = [0, 0];
+  let worldGrass = 0;
+  let samples = 0;
+
+  for (const seed of SEEDS.slice(0, 4)) {
+    const cfg = pair('upkeep', [1, 2])();
+    cfg.seed = seed;
+    const w = new World(cfg);
+    for (let i = 0; i < 10000; i++) {
+      step(w);
+      if (i < 8000) continue;
+      samples++;
+      let g = 0;
+      for (let c = 0; c < w.cells; c++) g += w.grass[c];
+      worldGrass += g / w.cells;
+      for (const si of [0, 1]) {
+        amount[si] += w.grazeAmount[si];
+        events[si] += w.grazeCount[si];
+      }
+    }
+  }
+  const names = pair('upkeep', [1, 2])().species.map((s) => s.name);
+  const mean = worldGrass / samples;
+  console.log(`    世界平均（セルあたりの残量） ${mean.toFixed(3)}`);
+  for (const i of [0, 1]) {
+    const v = amount[i] / events[i];
+    console.log(
+      `    ${names[i].padEnd(12)} 1回の採食 ${v.toFixed(3)}  世界平均比 ${(v / mean).toFixed(2)}`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+header('節7: 採食の頻度は予測どおりか');
+
+/**
+ * 節6 の数字（1回の採食で 1.032 対 0.423）は**成功したときの量**で、
+ * 歩あたりの摂取ではない。`grazeCount` は草が0のセルを数えていないため。
+ *
+ * 平衡では死骸も捕食も無いので、**1個体あたりの摂取は実効代謝と釣り合う**はず。
+ * だとすると採食に成功する歩の割合は
+ *
+ *     警戒型   0.475 ÷ 1.032 = 46%
+ *     無警戒型 0.400 ÷ 0.423 = 95%
+ *
+ * になる。**無警戒型は95%の歩で小さく食べ、警戒型は46%の歩で2.4倍大きく食べる。**
+ * 合計は同じで、制限しているものだけが違う——無警戒型は「草のあるセルの密度」、
+ * 警戒型は「濃いセルの密度」。
+ *
+ * ここで直接測る。外れたら、節6 の解釈をやり直すことになる。
+ */
+console.log('  歩あたりの摂取と採食頻度  4シード / 10000ステップ / 後半2000で集計');
+{
+  const amount = [0, 0];
+  const events = [0, 0];
+  const popSum = [0, 0];
+
+  for (const seed of SEEDS.slice(0, 4)) {
+    const cfg = pair('upkeep', [1, 2])();
+    cfg.seed = seed;
+    const w = new World(cfg);
+    const pop = new Int32Array(2);
+    for (let i = 0; i < 10000; i++) {
+      step(w);
+      if (i < 8000) continue;
+      pop.fill(0);
+      for (let a = 0; a < w.count; a++) if (w.aSpecies[a] < 2) pop[w.aSpecies[a]]++;
+      for (const si of [0, 1]) {
+        amount[si] += w.grazeAmount[si];
+        events[si] += w.grazeCount[si];
+        popSum[si] += pop[si];
+      }
+    }
+  }
+  const cfg = pair('upkeep', [1, 2])();
+  for (const i of [0, 1]) {
+    const s = cfg.species[i];
+    const eff = effOf(s);
+    const intake = amount[i] / popSum[i];
+    console.log(
+      `    ${s.name.padEnd(12)} 実効代謝 ${eff.toFixed(3)}  ` +
+        `歩あたりの摂取 ${intake.toFixed(3)}（比 ${(intake / eff).toFixed(2)}）  ` +
+        `採食頻度 ${((events[i] / popSum[i]) * 100).toFixed(0)}%  ` +
+        `1回あたり ${(amount[i] / events[i]).toFixed(3)}`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+header('節8: パッチを入れても共存は残るか');
+
+/**
+ * [07](../07-grass-patches.md) は不均質にすると 657対965 が **16対1606** になると
+ * 出した。だが 07 の本文は「勝敗がひっくり返るだけで共存自体は保たれる（8/8）」で、
+ * 16 は 0 ではない。OVERVIEW が「共存がさらに壊れた」と要約したのは踏み込みすぎ。
+ *
+ * ただし**16体は危ない**。上位捕食者が谷で1〜5体まで落ちて偶然だけで消えるのと
+ * 同じ領域で、[14](../14-mass-death.md) の「崩壊率は走行の長さで変わる」が
+ * そのまま当てはまる。**6000ステップの 8/8 は 30000 では持たないかもしれない。**
+ *
+ * これは「共存は残るが脆い」と「共存は壊れる」を分ける測定で、
+ * どちらでも筋2の書き方が変わる。
+ */
+console.log('  upkeep 警戒型 vs 無警戒型（捕食者なし・パッチあり）  8シード');
+for (const contrast of [0, 0.6, 0.9]) {
+  for (const steps of [6000, 30000]) {
+    const build = () => {
+      const cfg = pair('upkeep', [1, 2])();
+      if (contrast > 0) cfg.grass.patch = { scale: 30, contrast };
+      return cfg;
+    };
+    const t = await trial(build, { seeds: SEEDS, steps, tail: Math.floor(steps / 2) });
+    console.log(
+      `    強さ${contrast} ${String(steps).padStart(5)}歩  ${mark(t)}${t.survived}/${t.total}  ` +
+        t.species.map((s) => `${s.name} ${s.mean.toFixed(0)}(${s.min}-${s.max})`).join('  ') +
+        (t.extinctAt.length > 0 ? `  絶滅 ${t.extinctAt.join(',')}` : ''),
+    );
+  }
+}
+
+await done(t0);

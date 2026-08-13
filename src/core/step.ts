@@ -502,6 +502,8 @@ function moveOne(w: World, i: number): void {
 function feed(w: World): void {
   w.deathsEaten.fill(0);
   w.deathsOther.fill(0);
+  w.grazeAmount.fill(0);
+  w.grazeCount.fill(0);
 
   const nSpecies = w.defs.length;
   const order = w.order;
@@ -544,6 +546,13 @@ function feed(w: World): void {
         const eaten = avail < def.gainFromGrass ? avail : def.gainFromGrass;
         w.grass[c] = avail - eaten;
         w.aEnergy[i] += eaten;
+        // 種別に「1回の採食で取れた量」を数える。採食量の上限(4)より
+        // 残量(約1)のほうが小さいので、これは実質「食べた瞬間のセルの草」。
+        // 21 で、視野を持つ種と持たない種が草の分布の違う部分を消費している
+        // （平均 対 上側の裾）かを判定するために要る。step の外からは測れない
+        // ——個体は自分のセルを食べ切るので、step 後に見ると必ず0になる
+        w.grazeAmount[si] += eaten;
+        w.grazeCount[si]++;
       }
     }
   }
@@ -561,6 +570,8 @@ function feed(w: World): void {
  * 「還元を入れた効果」がいちばん効くはずの場面で消えてしまう。
  */
 function metabolize(w: World): void {
+  w.syncTerrain();
+
   // 行動コストを含めた実効値を種ごとに1回だけ求める。
   // スライダーで即時に変わるので毎ステップ引き直すが、種数ぶんなので安い
   const cost = w.effMetabolism;
@@ -568,13 +579,31 @@ function metabolize(w: World): void {
 
   // 速度が個体ごとに違う構成でだけ、1体ずつ引き直す
   const mutating = w.anyMutation;
+  // 地形は個体のいるセルを見るので、種ごとの1回では済まない
+  const terrain = w.terrainVaried;
+  const tw = w.terrainWeight;
+  w.terrainCostPaid = 0;
+  w.terrainCostFlat = 0;
 
   for (let i = 0; i < w.count; i++) {
     if (w.aAlive[i] === 0) continue;
     const si = w.aSpecies[i];
     const def = w.defs[si];
 
-    w.aEnergy[i] -= mutating ? w.effectiveMetabolismFor(si, w.aSpeed[i]) : cost[si];
+    let charge = mutating ? w.effectiveMetabolismFor(si, w.aSpeed[i]) : cost[si];
+    if (terrain && w.terrainTargetSpecies[si] === 1) {
+      // 平坦な場合との差分だけを足す。倍率1のセルでは差が0になるので、
+      // contrast=0 の走行が地形を入れる前と完全に一致する
+      const term = w.terrainModulatedTerm(si, mutating ? w.aSpeed[i] : def.speed);
+      const weight = tw[w.aY[i] * w.width + w.aX[i]];
+      charge += term * (weight - 1);
+      // 設計上の平均倍率は1でも、個体が偏れば実現値はずれる。
+      // 比を見ないと「起伏の効果」と「コストが上下した効果」が分けられない
+      w.terrainCostFlat += term;
+      w.terrainCostPaid += term * weight;
+    }
+
+    w.aEnergy[i] -= charge;
     if (w.aEnergy[i] <= 0) {
       w.aAlive[i] = 0;
       w.deathsOther[si]++;
