@@ -14,8 +14,21 @@ export interface TraceOptions {
   steps: number;
   /** 何ステップごとに記録するか */
   every: number;
-  /** 最後に速度の分布も返す場合の刻み幅 */
+  /** 最後に形質の分布も返す場合の刻み幅 */
   histogramBin?: number;
+  /** どの形質の分布を返すか。省略すると速度（10 のスクリプトがこれ） */
+  histogramTrait?: 'speed' | 'vision';
+  /**
+   * 視野別の採食プロファイルを取り始めるステップ。省略すると取らない。
+   *
+   * 集団が動いている途中を混ぜると、視野ビンごとの数字が「その視野の個体の性質」
+   * ではなく「その視野が多かった時期の世界の性質」になる。収束した後だけを取る。
+   */
+  profileFrom?: number;
+  /** 視野ビンの刻み幅。省略すると 0.5 */
+  profileBin?: number;
+  /** プロファイルを取る種のインデックス。省略すると 0 */
+  profileSpecies?: number;
 }
 
 export interface TraceMark {
@@ -23,13 +36,49 @@ export interface TraceMark {
   /** 種インデックス別の平均速度と標準偏差 */
   speedMean: number[];
   speedSd: number[];
+  /** 同じく視野。視野が遺伝しない種では定義値で一定 */
+  visionMean: number[];
+  visionSd: number[];
   population: number[];
+}
+
+/**
+ * 視野ビン別の採食と死亡。**21 の軸が1つの種の中にもあるか**を見るための集計。
+ *
+ * 21 は種をまたいで「無警戒型は94%の歩で0.423ずつ、警戒型は46%の歩で1.032ずつ」を
+ * 出した。合計は同じで、制限している統計量だけが違う。同じ形が連続した視野の軸の
+ * 上にも並ぶなら、軸は種の境目ではなく形質そのものが作っていることになる。
+ *
+ * 死亡は**死因ごとに**分ける。見れば逃げられる（被捕食を減らす）と、
+ * 見る代償で先に飢える（餓死を増やす）は逆を向くので、正味では打ち消し合う。
+ */
+export interface VisionProfile {
+  bin: number;
+  /** 集計に使った (個体 × ステップ) の総数。ビンの重みでもある */
+  rows: {
+    /** ビンの下端 */
+    from: number;
+    /** そのビンにいた個体×ステップ数 */
+    agentSteps: number;
+    /** そのうち草を食べた回数 */
+    grazeSteps: number;
+    /** 食べた量の合計 */
+    grazeAmount: number;
+  }[];
+  /** 死因別の平均視野と数。集団平均との差がその死因の選択差 */
+  eaten: { count: number; visionSum: number };
+  starved: { count: number; visionSum: number };
+  /** 同じ区間の集団の平均視野。選択差はこれとの差で読む */
+  popVisionSum: number;
+  popCount: number;
 }
 
 export interface TraceResult {
   marks: TraceMark[];
-  /** 種インデックス0の速度の分布。histogramBin を指定したときだけ入る */
+  /** 種インデックス0の形質の分布。histogramBin を指定したときだけ入る */
   histogram?: { bin: number; counts: number[]; total: number };
+  /** 視野別の採食プロファイル。profileFrom を指定したときだけ入る */
+  profile?: VisionProfile;
 }
 
 export function runTrace(config: WorldConfig, opts: TraceOptions): TraceResult {
@@ -37,36 +86,90 @@ export function runTrace(config: WorldConfig, opts: TraceOptions): TraceResult {
   const n = w.defs.length;
   const mean = new Float64Array(n);
   const sd = new Float64Array(n);
+  const vMean = new Float64Array(n);
+  const vSd = new Float64Array(n);
   const counts = new Int32Array(n);
   const marks: TraceMark[] = [];
 
+  const profile = opts.profileFrom === undefined ? undefined : emptyProfile(opts.profileBin ?? 0.5);
+  const profileSpecies = opts.profileSpecies ?? 0;
+
   for (let s = 0; s < opts.steps; s++) {
     step(w);
+
+    // プロファイルは step の直後に取る。compact 済みなので [0, count) は生存個体で、
+    // aGrazed はこのステップに食べた量が入っている（繁殖で生まれた子は0）
+    if (profile !== undefined && s >= opts.profileFrom!) {
+      accumulateProfile(w, profile, profileSpecies);
+    }
+
     if ((s + 1) % opts.every !== 0) continue;
 
     w.speedStats(mean, sd);
+    w.visionStats(vMean, vSd);
     w.countBySpecies(counts);
     marks.push({
       step: s + 1,
       speedMean: Array.from(mean),
       speedSd: Array.from(sd),
+      visionMean: Array.from(vMean),
+      visionSd: Array.from(vSd),
       population: Array.from(counts),
     });
   }
 
-  if (opts.histogramBin === undefined) return { marks };
+  if (opts.histogramBin === undefined) return { marks, profile };
 
   const bin = opts.histogramBin;
+  const value = opts.histogramTrait === 'vision' ? w.aVision : w.aSpeed;
   const hist: number[] = [];
   let total = 0;
   for (let i = 0; i < w.count; i++) {
     if (w.aSpecies[i] !== 0) continue;
-    const b = Math.floor(w.aSpeed[i] / bin);
+    const b = Math.floor(value[i] / bin);
     while (hist.length <= b) hist.push(0);
     hist[b]++;
     total++;
   }
-  return { marks, histogram: { bin, counts: hist, total } };
+  return { marks, histogram: { bin, counts: hist, total }, profile };
+}
+
+function emptyProfile(bin: number): VisionProfile {
+  return {
+    bin,
+    rows: [],
+    eaten: { count: 0, visionSum: 0 },
+    starved: { count: 0, visionSum: 0 },
+    popVisionSum: 0,
+    popCount: 0,
+  };
+}
+
+function accumulateProfile(w: World, p: VisionProfile, si: number): void {
+  for (let i = 0; i < w.count; i++) {
+    if (w.aSpecies[i] !== si) continue;
+    // このステップに生まれた子（年齢0）は採食の手番に居なかった。
+    // 混ぜると「食べなかった個体」として数えられ、採食頻度が一律に薄まる
+    if (w.aAge[i] === 0) continue;
+    const v = w.aVision[i];
+    const b = Math.floor(v / p.bin);
+    while (p.rows.length <= b) {
+      p.rows.push({ from: p.rows.length * p.bin, agentSteps: 0, grazeSteps: 0, grazeAmount: 0 });
+    }
+    const row = p.rows[b];
+    row.agentSteps++;
+    const g = w.aGrazed[i];
+    if (g > 0) {
+      row.grazeSteps++;
+      row.grazeAmount += g;
+    }
+    p.popVisionSum += v;
+    p.popCount++;
+  }
+  p.eaten.count += w.deathsEaten[si];
+  p.eaten.visionSum += w.visionSumEaten[si];
+  p.starved.count += w.deathsOther[si];
+  p.starved.visionSum += w.visionSumOther[si];
 }
 
 /**
@@ -289,7 +392,7 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
 
   const totalGrass = (): number => {
     let g = 0;
-    for (let c = 0; c < w.cells; c++) g += w.grass[c];
+    for (let c = 0; c < w.cells; c++) g += w.grass[c] + w.grassB[c];
     return g;
   };
 
@@ -430,6 +533,25 @@ export interface SpeciesResult {
   /** 速度を実際に測れた回数。0 なら集計区間にこの種の個体がいなかった */
   speedSamples: number;
   /**
+   * 同じものを視野について。速度と同じ注意がそのまま当てはまる
+   * （測れなかった試行は定義値なので平均に混ぜない）。
+   *
+   * 標本数は速度と共通。片方だけ取るより、両方あるほうが
+   * 「動かした覚えのない軸が動いていないか」をその場で確かめられる。
+   */
+  visionMean: number;
+  visionSd: number;
+  /**
+   * 1ステップあたり資源A・Bから食べた量（集計区間の平均、個体数で割らない）。
+   *
+   * 合計だけでは「専門型が本当に自分の資源だけを取っているか」が見えない。
+   * 22 で「中間の個体が両方の資源を取ると軸が畳まれる」を踏んだので、
+   * **誰がどちらをどれだけ取ったか**を分けて数えられないと同じ失敗を繰り返す。
+   * 資源が1本の構成では両方0。
+   */
+  grazeA: number;
+  grazeB: number;
+  /**
    * 1ステップあたり大量死で取り除かれた個体数（集計区間の平均）。
    *
    * 大量死は「1ステップあたりに取り除く割合」を揃えた組で比べる軸なので、
@@ -507,6 +629,14 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
   const speedMeanSum = new Float64Array(n);
   const speedSdSum = new Float64Array(n);
   const speedSamples = new Float64Array(n);
+  // 視野も同じ刻みで取る。標本数は速度と共通なので speedSamples を使い回す
+  const visionMean = new Float64Array(n);
+  const visionSd = new Float64Array(n);
+  const visionMeanSum = new Float64Array(n);
+  const visionSdSum = new Float64Array(n);
+  // 資源別の摂取。合計だけでは専門型が自分の資源だけを取っているかが見えない
+  const grazeASum = new Float64Array(n);
+  const grazeBSum = new Float64Array(n);
   const killedSum = new Float64Array(n);
   const crowdedSum = new Float64Array(n);
   const infectedSum = new Float64Array(n);
@@ -544,6 +674,8 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
         sqSum[i] += c * c;
         if (c < min[i]) min[i] = c;
         if (c > max[i]) max[i] = c;
+        grazeASum[i] += w.grazeAmountA[i];
+        grazeBSum[i] += w.grazeAmountB[i];
         killedSum[i] += w.deathsDisturbance[i];
         crowdedSum[i] += w.deathsCrowding[i];
         infDeathSum[i] += w.deathsInfection[i];
@@ -562,10 +694,13 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
       // 速度は個体数ぶん舐めるので、遺伝させる種がいるときだけ、しかも間引いて取る
       if (w.anyMutation && s % 10 === 0) {
         w.speedStats(speedMean, speedSd);
+        w.visionStats(visionMean, visionSd);
         for (let i = 0; i < n; i++) {
           if (counts[i] === 0) continue;
           speedMeanSum[i] += speedMean[i];
           speedSdSum[i] += speedSd[i];
+          visionMeanSum[i] += visionMean[i];
+          visionSdSum[i] += visionSd[i];
           speedSamples[i]++;
         }
       }
@@ -573,7 +708,7 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
       // 草の総量はセル数ぶん舐めるので間引く
       if (s % 50 === 0) {
         let g = 0;
-        for (let c = 0; c < w.cells; c++) g += w.grass[c];
+        for (let c = 0; c < w.cells; c++) g += w.grass[c] + w.grassB[c];
         grassSum += g;
         grassSamples++;
       }
@@ -599,6 +734,10 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
       speedMean: speedSamples[i] > 0 ? speedMeanSum[i] / speedSamples[i] : def.speed,
       speedSd: speedSamples[i] > 0 ? speedSdSum[i] / speedSamples[i] : 0,
       speedSamples: speedSamples[i],
+      visionMean: speedSamples[i] > 0 ? visionMeanSum[i] / speedSamples[i] : def.visionRange,
+      visionSd: speedSamples[i] > 0 ? visionSdSum[i] / speedSamples[i] : 0,
+      grazeA: samples > 0 ? grazeASum[i] / samples : 0,
+      grazeB: samples > 0 ? grazeBSum[i] / samples : 0,
       killed: samples > 0 ? killedSum[i] / samples : 0,
       crowded: samples > 0 ? crowdedSum[i] / samples : 0,
       infection: {

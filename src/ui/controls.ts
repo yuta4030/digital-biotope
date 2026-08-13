@@ -67,7 +67,7 @@ export function buildControls(container: HTMLElement, config: WorldConfig): void
       const total = def.metabolism + def.speedCost * def.speed + def.visionCost * def.visionRange;
       const hasCost = def.speedCost > 0 || def.visionCost > 0;
       // 速度が遺伝する種は個体ごとに実効代謝が違う。ここに出せるのは初期個体の値だけ
-      const head = def.mutation ? '初期個体の実効代謝' : '実効代謝';
+      const head = def.mutation || def.visionMutation ? '初期個体の実効代謝' : '実効代謝';
       eff.textContent = hasCost
         ? `${head} ${total.toFixed(2)}` +
           `（基礎 ${def.metabolism.toFixed(2)}` +
@@ -101,7 +101,9 @@ export function buildControls(container: HTMLElement, config: WorldConfig): void
     // 速度が遺伝する種では、この値は初期個体に配るぶんにしか効かない
     slider(g, def.mutation ? '移動速度 *' : '移動速度', 0, 4, def.mutation ? 0.1 : 1, def.mutation ? 1 : 0,
       () => def.speed, (v) => (def.speed = v), refresh);
-    slider(g, '視野', 0, 8, 1, 0,
+    // 視野が遺伝する種では、この値は初期個体に配るぶんにしか効かない（速度と同じ）
+    slider(g, def.visionMutation ? '視野 *' : '視野', 0, 8, def.visionMutation ? 0.5 : 1,
+      def.visionMutation ? 1 : 0,
       () => def.visionRange, (v) => (def.visionRange = v), refresh);
     slider(g, '死骸の還元', 0, 100, 1, 0,
       () => def.corpseGrass, (v) => (def.corpseGrass = v));
@@ -112,8 +114,13 @@ export function buildControls(container: HTMLElement, config: WorldConfig): void
 
     if (def.mutation) {
       const m = def.mutation;
-      slider(g, '変異の強さ', 0, 0.2, 0.005, 3,
+      slider(g, '変異の強さ（速度）', 0, 0.2, 0.005, 3,
         () => m.speedSigma, (v) => (m.speedSigma = v));
+    }
+    if (def.visionMutation) {
+      const m = def.visionMutation;
+      slider(g, '変異の強さ（視野）', 0, 0.2, 0.005, 3,
+        () => m.sigma, (v) => (m.sigma = v));
     }
 
     // 視野0の種では効かないが、視野は実行中に上げられるので常に出しておく

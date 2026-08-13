@@ -34,6 +34,16 @@ export interface Trial {
     /** 速度を測れた試行の到達速度。収束したのか散らばったのかを見るため */
     speedBySeed: number[];
     /**
+     * 1ステップあたり資源A・Bから食べた量。資源が2本の構成でだけ意味を持つ。
+     * 合計だけでは専門型が自分の資源だけを取っているかが見えない
+     */
+    grazeA: number;
+    grazeB: number;
+    /** 同じものを視野について。視野が遺伝しない種では定義値 */
+    vision: number;
+    visionSd: number;
+    visionBySeed: number[];
+    /**
      * 1ステップあたり大量死で取り除かれた数。設計値どおりに削れているかの確認用。
      * `killed / mean` が条件間で揃っていて初めて「揺らぎだけを動かした」と言える
      */
@@ -106,6 +116,7 @@ function summarize(total: number, rs: RunResult[]): Trial {
       // 絶滅した試行の速度は測定値ではなく定義値なので、平均から外す
       const measured = rs.map((r) => r.species[i]).filter((x) => x.speedSamples > 0);
       const speeds = measured.map((x) => x.speedMean);
+      const visions = measured.map((x) => x.visionMean);
       return {
         name: s.name,
         mean: rs.reduce((a, r) => a + r.species[i].mean, 0) / total,
@@ -118,6 +129,14 @@ function summarize(total: number, rs: RunResult[]): Trial {
             ? measured.reduce((a, x) => a + x.speedSd, 0) / measured.length
             : NaN,
         speedBySeed: speeds,
+        vision: visions.length > 0 ? visions.reduce((a, b) => a + b, 0) / visions.length : NaN,
+        visionSd:
+          measured.length > 0
+            ? measured.reduce((a, x) => a + x.visionSd, 0) / measured.length
+            : NaN,
+        visionBySeed: visions,
+        grazeA: rs.reduce((a, r) => a + r.species[i].grazeA, 0) / total,
+        grazeB: rs.reduce((a, r) => a + r.species[i].grazeB, 0) / total,
         killed: rs.reduce((a, r) => a + r.species[i].killed, 0) / total,
         crowded: rs.reduce((a, r) => a + r.species[i].crowded, 0) / total,
         infection: {
@@ -136,11 +155,19 @@ function summarize(total: number, rs: RunResult[]): Trial {
  * 一度も測れなかった場合は数字を出さない
  */
 export function speedOf(t: Trial, speciesIdx = 0): string {
-  const s = t.species[speciesIdx];
-  if (s.speedBySeed.length === 0) return '— (測定なし)';
-  const lo = Math.min(...s.speedBySeed);
-  const hi = Math.max(...s.speedBySeed);
-  return `${s.speed.toFixed(2)} (${lo.toFixed(2)}-${hi.toFixed(2)})`;
+  return traitOf(t.species[speciesIdx].speed, t.species[speciesIdx].speedBySeed);
+}
+
+/** 同じものを視野について */
+export function visionOf(t: Trial, speciesIdx = 0): string {
+  return traitOf(t.species[speciesIdx].vision, t.species[speciesIdx].visionBySeed);
+}
+
+function traitOf(mean: number, bySeed: number[]): string {
+  if (bySeed.length === 0) return '— (測定なし)';
+  const lo = Math.min(...bySeed);
+  const hi = Math.max(...bySeed);
+  return `${mean.toFixed(2)} (${lo.toFixed(2)}-${hi.toFixed(2)})`;
 }
 
 /**

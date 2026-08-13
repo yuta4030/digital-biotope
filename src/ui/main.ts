@@ -86,7 +86,7 @@ window.addEventListener('keydown', (e) => {
 /** 草の総量。セル数ぶん舐めるのでフレームに1回だけ */
 function totalGrass(): number {
   let t = 0;
-  for (let c = 0; c < world.cells; c++) t += world.grass[c];
+  for (let c = 0; c < world.cells; c++) t += world.grass[c] + world.grassB[c];
   return t;
 }
 
@@ -125,22 +125,29 @@ const readoutCounts = () => {
   return counts;
 };
 
-// 速度が遺伝する構成では個体数だけ見ても何が起きているか分からないので、
-// 集団の平均速度を読み出しに出す。種は32までなのでこの長さで足りる
+// 形質が遺伝する構成では個体数だけ見ても何が起きているか分からないので、
+// 集団の平均を読み出しに出す。種は32までなのでこの長さで足りる
 const speedMean = new Float64Array(32);
 const speedSd = new Float64Array(32);
+const visionMean = new Float64Array(32);
+const visionSd = new Float64Array(32);
 
 function updateReadout(): void {
   const counts = readoutCounts();
   if (world.anyMutation) world.speedStats(speedMean, speedSd);
+  if (world.anyVisionMutation) world.visionStats(visionMean, visionSd);
 
   // .readout は flex なので、gap を効かせるため各項目を要素で包む
   const parts = [`<span>step <b>${world.stepCount.toLocaleString()}</b></span>`];
   world.defs.forEach((def, i) => {
-    const evolved =
-      def.mutation !== undefined && counts[i] > 0
-        ? `（速度 ${speedMean[i].toFixed(2)}±${speedSd[i].toFixed(2)}）`
-        : '';
+    const traits: string[] = [];
+    if (def.mutation !== undefined && counts[i] > 0) {
+      traits.push(`速度 ${speedMean[i].toFixed(2)}±${speedSd[i].toFixed(2)}`);
+    }
+    if (def.visionMutation !== undefined && counts[i] > 0) {
+      traits.push(`視野 ${visionMean[i].toFixed(2)}±${visionSd[i].toFixed(2)}`);
+    }
+    const evolved = traits.length > 0 ? `（${traits.join(' ')}）` : '';
     parts.push(
       `<span><span style="color:${def.color}">■</span> ${def.name} <b>${counts[i]}</b>${evolved}</span>`,
     );
