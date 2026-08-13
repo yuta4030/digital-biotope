@@ -272,4 +272,45 @@ for (const sigma of [0.01, 0.05, 0.1, 0.2]) {
   await sigmaRow(sigma, 30000, 5000, true);
 }
 
+// ---------------------------------------------------------------------------
+// 節5: 節3 で残った組み合わせは本当に共存か（21 節5 とまったく同じ形）
+//
+// 節3 の v=0.25 と v=0.50 は30000歩でも数字が動かない。だが規則7 は
+// 「両方生き残った」を共存の証拠にしてはいけないと言っている——**遅い排除の
+// 途中**かもしれない。実際この走行の σ=0.01 がその形だった（6000歩で381体、
+// 30000歩で1体）。
+//
+// 21 と同じ判定を当てる。片方を5体から始めて増えるか。両方向で増えるなら
+// 内点の安定平衡があり、片方向だけなら途中経過。
+//
+// v=0.80 は節3 で排除が起きた側なので**陰性対照**になる。判定が
+// 「何でも共存と言う」ものになっていないかをここで確かめる。
+// ---------------------------------------------------------------------------
+async function invasionRow(vLow: number, invader: number): Promise<void> {
+  const build = () => {
+    const cfg = upkeepPair(vLow)();
+    for (const s of cfg.species) {
+      if (s.id === 3) continue; // 肉食は 0 のまま（21 の共存は捕食者なしで測られている）
+      s.initialCount = s.id === invader ? 5 : 300;
+    }
+    return cfg;
+  };
+  const t = await trial(build, { seeds: SEEDS_8, steps: 30000, tail: 15000 });
+  const [hi, lo] = t.species;
+  const name = invader === 1 ? '警戒型(視野3)' : `無警戒型(視野${vLow.toFixed(2)})`;
+  console.log(
+    `  無警戒型${vLow.toFixed(2)}  ${name.padEnd(18)}が5体から  ` +
+      `警戒型 ${hi.mean.toFixed(0).padStart(4)}(${String(hi.min).padStart(3)}-${String(hi.max).padStart(4)})` +
+      `  無警戒型 ${lo.mean.toFixed(0).padStart(4)}(${String(lo.min).padStart(3)}-${String(lo.max).padStart(4)})`,
+  );
+}
+
+header('節3 で残った組を相互侵入にかける（8シード・30000歩・片方を5体から）');
+// 肉食を消してあるので mark() は 0/8 になる。草食2種が両方増えたかは個体数で読む
+for (const v of [0.25, 0.5, 0.8]) {
+  for (const invader of [1, 2]) {
+    await invasionRow(v, invader);
+  }
+}
+
 await done(t0);
