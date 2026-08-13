@@ -392,7 +392,7 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
 
   const totalGrass = (): number => {
     let g = 0;
-    for (let c = 0; c < w.cells; c++) g += w.grass[c];
+    for (let c = 0; c < w.cells; c++) g += w.grass[c] + w.grassB[c];
     return g;
   };
 
@@ -542,6 +542,16 @@ export interface SpeciesResult {
   visionMean: number;
   visionSd: number;
   /**
+   * 1ステップあたり資源A・Bから食べた量（集計区間の平均、個体数で割らない）。
+   *
+   * 合計だけでは「専門型が本当に自分の資源だけを取っているか」が見えない。
+   * 22 で「中間の個体が両方の資源を取ると軸が畳まれる」を踏んだので、
+   * **誰がどちらをどれだけ取ったか**を分けて数えられないと同じ失敗を繰り返す。
+   * 資源が1本の構成では両方0。
+   */
+  grazeA: number;
+  grazeB: number;
+  /**
    * 1ステップあたり大量死で取り除かれた個体数（集計区間の平均）。
    *
    * 大量死は「1ステップあたりに取り除く割合」を揃えた組で比べる軸なので、
@@ -624,6 +634,9 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
   const visionSd = new Float64Array(n);
   const visionMeanSum = new Float64Array(n);
   const visionSdSum = new Float64Array(n);
+  // 資源別の摂取。合計だけでは専門型が自分の資源だけを取っているかが見えない
+  const grazeASum = new Float64Array(n);
+  const grazeBSum = new Float64Array(n);
   const killedSum = new Float64Array(n);
   const crowdedSum = new Float64Array(n);
   const infectedSum = new Float64Array(n);
@@ -661,6 +674,8 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
         sqSum[i] += c * c;
         if (c < min[i]) min[i] = c;
         if (c > max[i]) max[i] = c;
+        grazeASum[i] += w.grazeAmountA[i];
+        grazeBSum[i] += w.grazeAmountB[i];
         killedSum[i] += w.deathsDisturbance[i];
         crowdedSum[i] += w.deathsCrowding[i];
         infDeathSum[i] += w.deathsInfection[i];
@@ -693,7 +708,7 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
       // 草の総量はセル数ぶん舐めるので間引く
       if (s % 50 === 0) {
         let g = 0;
-        for (let c = 0; c < w.cells; c++) g += w.grass[c];
+        for (let c = 0; c < w.cells; c++) g += w.grass[c] + w.grassB[c];
         grassSum += g;
         grassSamples++;
       }
@@ -721,6 +736,8 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
       speedSamples: speedSamples[i],
       visionMean: speedSamples[i] > 0 ? visionMeanSum[i] / speedSamples[i] : def.visionRange,
       visionSd: speedSamples[i] > 0 ? visionSdSum[i] / speedSamples[i] : 0,
+      grazeA: samples > 0 ? grazeASum[i] / samples : 0,
+      grazeB: samples > 0 ? grazeBSum[i] / samples : 0,
       killed: samples > 0 ? killedSum[i] / samples : 0,
       crowded: samples > 0 ? crowdedSum[i] / samples : 0,
       infection: {

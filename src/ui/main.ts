@@ -86,7 +86,7 @@ window.addEventListener('keydown', (e) => {
 /** 草の総量。セル数ぶん舐めるのでフレームに1回だけ */
 function totalGrass(): number {
   let t = 0;
-  for (let c = 0; c < world.cells; c++) t += world.grass[c];
+  for (let c = 0; c < world.cells; c++) t += world.grass[c] + world.grassB[c];
   return t;
 }
 

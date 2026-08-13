@@ -70,8 +70,29 @@ export class World {
   /** 種別の実効代謝。スライダーで随時変わるので毎ステップ引き直す */
   readonly effMetabolism: Float64Array;
 
-  /** 各セルの草の量 */
+  /** 各セルの草の量。資源が2本のときはこれが資源A */
   readonly grass: Float32Array;
+  /**
+   * 各セルの資源Bの量。`config.grass.split` を書いたときだけ使う。
+   * 書かない構成では全要素0のまま触られないので、既存の結果は変わらない。
+   */
+  readonly grassB: Float32Array;
+  /** 資源を2本に分けているか。書かなければ false で、分岐ごと省く */
+  readonly twoResources: boolean;
+  /**
+   * 種インデックス別の資源Aへの配分。Bへは 1 - これ。
+   * 資源が1本の構成では全部1で、掛け算そのものを省く。
+   */
+  readonly resourceA: Float64Array;
+  /**
+   * 直前のステップに種インデックス別で、資源A・Bから食べた量。
+   *
+   * 合計（grazeAmount）だけでは「専門型が本当に自分の資源だけを取っているか」が
+   * 見えない。22 で「中間の個体が両方の資源を取ると軸が畳まれる」を踏んだので、
+   * **誰がどちらをどれだけ取ったか**を分けて数えられないと同じ失敗を繰り返す。
+   */
+  readonly grazeAmountA: Float64Array;
+  readonly grazeAmountB: Float64Array;
   /**
    * 各セルの回復速度の倍率。**平均はちょうど1**なので、
    * これを掛けても世界全体の生産量は config.grass.regrow のまま変わらない。
@@ -391,7 +412,23 @@ export class World {
     this.speedCount = new Float64Array(n);
 
     this.grass = new Float32Array(this.cells);
-    this.grass.fill(config.grass.max * config.grass.initialRatio);
+    this.grassB = new Float32Array(this.cells);
+    this.twoResources = config.grass.split !== undefined;
+    this.resourceA = new Float64Array(n).fill(1);
+    this.grazeAmountA = new Float64Array(n);
+    this.grazeAmountB = new Float64Array(n);
+    if (this.twoResources) {
+      const share = config.grass.split!.supplyA;
+      if (share < 0 || share > 1) throw new Error(`供給比は0〜1でなければなりません: ${share}`);
+      this.defs.forEach((d, i) => {
+        this.resourceA[i] = d.resourceA ?? 1;
+      });
+      // 上限も供給比で按分する。総容量を変えないため（変えると豊穣化と混ざる）
+      this.grass.fill(config.grass.max * share * config.grass.initialRatio);
+      this.grassB.fill(config.grass.max * (1 - share) * config.grass.initialRatio);
+    } else {
+      this.grass.fill(config.grass.max * config.grass.initialRatio);
+    }
     this.grassWeight = new Float32Array(this.cells);
     this.syncGrassWeight();
     this.terrainWeight = new Float32Array(this.cells);
@@ -776,7 +813,7 @@ export class World {
     this.defs.forEach((def, i) => population.set(def.id, counts[i]));
 
     let totalGrass = 0;
-    for (let c = 0; c < this.cells; c++) totalGrass += this.grass[c];
+    for (let c = 0; c < this.cells; c++) totalGrass += this.grass[c] + this.grassB[c];
 
     return { step: this.stepCount, population, totalGrass };
   }

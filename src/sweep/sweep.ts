@@ -97,6 +97,8 @@ export async function runSweep(
         sd: avg(results.map((r) => r.species[i].sd)),
         killed: avg(results.map((r) => r.species[i].killed)),
         crowded: avg(results.map((r) => r.species[i].crowded)),
+        grazeA: avg(results.map((r) => r.species[i].grazeA)),
+        grazeB: avg(results.map((r) => r.species[i].grazeB)),
         infection: {
           infected: avg(results.map((r) => r.species[i].infection.infected)),
           deaths: avg(results.map((r) => r.species[i].infection.deaths)),

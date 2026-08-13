@@ -74,7 +74,7 @@ export class GridRenderer {
         data[o + 2] = this.rgb[k + 2];
       } else {
         // 空きセルは草の量に応じた緑
-        const t = w.grass[c] / grassMax;
+        const t = (w.grass[c] + w.grassB[c]) / grassMax;
         data[o] = 10 + t * 26;
         data[o + 1] = 18 + t * 116;
         data[o + 2] = 14 + t * 44;

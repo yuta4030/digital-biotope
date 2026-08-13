@@ -33,6 +33,12 @@ export interface Trial {
     speedSd: number;
     /** 速度を測れた試行の到達速度。収束したのか散らばったのかを見るため */
     speedBySeed: number[];
+    /**
+     * 1ステップあたり資源A・Bから食べた量。資源が2本の構成でだけ意味を持つ。
+     * 合計だけでは専門型が自分の資源だけを取っているかが見えない
+     */
+    grazeA: number;
+    grazeB: number;
     /** 同じものを視野について。視野が遺伝しない種では定義値 */
     vision: number;
     visionSd: number;
@@ -129,6 +135,8 @@ function summarize(total: number, rs: RunResult[]): Trial {
             ? measured.reduce((a, x) => a + x.visionSd, 0) / measured.length
             : NaN,
         visionBySeed: visions,
+        grazeA: rs.reduce((a, r) => a + r.species[i].grazeA, 0) / total,
+        grazeB: rs.reduce((a, r) => a + r.species[i].grazeB, 0) / total,
         killed: rs.reduce((a, r) => a + r.species[i].killed, 0) / total,
         crowded: rs.reduce((a, r) => a + r.species[i].crowded, 0) / total,
         infection: {

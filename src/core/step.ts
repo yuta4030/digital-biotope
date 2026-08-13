@@ -228,9 +228,24 @@ function massDeath(w: World): void {
 function regrowGrass(w: World): void {
   w.syncGrassWeight();
 
-  const grass = w.grass;
   const max = w.config.grass.max;
   const rate = w.config.grass.regrow;
+
+  if (!w.twoResources) {
+    w.grassAdded = regrowField(w, w.grass, rate, max);
+    return;
+  }
+
+  // 総生産量と総容量を固定したまま2本に配る。それぞれを rate にすると
+  // 入力が2倍になり、06 の豊穣化と区別がつかなくなる
+  const share = w.config.grass.split!.supplyA;
+  w.grassAdded =
+    regrowField(w, w.grass, rate * share, max * share) +
+    regrowField(w, w.grassB, rate * (1 - share), max * (1 - share));
+}
+
+/** 1本ぶんの回復。資源が1本のときはこれを1回呼ぶだけで従来と同じ計算になる */
+function regrowField(w: World, grass: Float32Array, rate: number, max: number): number {
   let added = 0;
 
   // 上限を超えているセルは伸びも縮みもしない。死骸の還元は上限を超えて積めるので、
@@ -264,7 +279,7 @@ function regrowGrass(w: World): void {
     }
   }
 
-  w.grassAdded = added;
+  return added;
 }
 
 /**
@@ -367,12 +382,16 @@ function findGrass(w: World, x: number, y: number, r: number, current: number): 
   let bestD2 = Infinity;
   let bestG = 0;
   let ties = 0;
+  // 資源が2本あるときは合計の多い方へ向かう。**採食の配分は見ない**——
+  // 見させると「探し方」と「食べ方」の2つの軸が同時に動く
+  const two = w.twoResources;
 
   for (let oy = -r; oy <= r; oy++) {
     const row = wrap(y + oy, w.height) * w.width;
     for (let ox = -r; ox <= r; ox++) {
       if (ox === 0 && oy === 0) continue;
-      const g = w.grass[row + wrap(x + ox, w.width)];
+      const k = row + wrap(x + ox, w.width);
+      const g = two ? w.grass[k] + w.grassB[k] : w.grass[k];
       if (g <= current) continue;
 
       const d2 = ox * ox + oy * oy;
@@ -468,7 +487,11 @@ function decideDirection(w: World, i: number, si: number, x: number, y: number, 
 
   if (!hungry && predators !== 0 && findNearest(w, x, y, predators, r)) return -1;
   if (preys !== 0 && findNearest(w, x, y, preys, r)) return 1;
-  if (def.eatsGrass && findGrass(w, x, y, r, w.grass[y * w.width + x])) return 1;
+  if (def.eatsGrass) {
+    const c = y * w.width + x;
+    const here = w.twoResources ? w.grass[c] + w.grassB[c] : w.grass[c];
+    if (findGrass(w, x, y, r, here)) return 1;
+  }
   if (hungry && predators !== 0 && findNearest(w, x, y, predators, r)) return -1;
 
   return 0;
@@ -512,6 +535,8 @@ function feed(w: World): void {
   w.deathsEaten.fill(0);
   w.deathsOther.fill(0);
   w.grazeAmount.fill(0);
+  w.grazeAmountA.fill(0);
+  w.grazeAmountB.fill(0);
   w.grazeCount.fill(0);
   w.visionSumEaten.fill(0);
   w.visionSumOther.fill(0);
@@ -556,7 +581,30 @@ function feed(w: World): void {
     }
 
     // 獲物を捕らえた個体はその上さらに草を食べない
-    if (!ate && def.eatsGrass) {
+    if (!ate && def.eatsGrass && w.twoResources) {
+      // 採食量を配分に応じて2本に割り振り、それぞれ別に上限で頭打ちにする。
+      // 配分の合計は1なので、専門化は「片方を捨てて片方に全部賭ける」になる
+      const pA = w.resourceA[si];
+      const capA = def.gainFromGrass * pA;
+      const capB = def.gainFromGrass - capA;
+      const availA = w.grass[c];
+      const availB = w.grassB[c];
+      const eatenA = availA < capA ? availA : capA;
+      const eatenB = availB < capB ? availB : capB;
+      const eaten = eatenA + eatenB;
+      if (eaten > 0) {
+        w.grass[c] = availA - eatenA;
+        w.grassB[c] = availB - eatenB;
+        w.aEnergy[i] += eaten;
+        w.grazeAmount[si] += eaten;
+        // 誰がどちらをどれだけ取ったかを分けて数える。合計だけでは
+        // 「専門型が本当に自分の資源だけを取っているか」が見えない
+        w.grazeAmountA[si] += eatenA;
+        w.grazeAmountB[si] += eatenB;
+        w.grazeCount[si]++;
+        w.aGrazed[i] = eaten;
+      }
+    } else if (!ate && def.eatsGrass) {
       const avail = w.grass[c];
       if (avail > 0) {
         const eaten = avail < def.gainFromGrass ? avail : def.gainFromGrass;

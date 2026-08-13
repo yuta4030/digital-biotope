@@ -464,6 +464,35 @@ presets.push({
     ]),
 });
 
+presets.push({
+  key: 'tworesource',
+  label: '資源2本（ニッチ分割）',
+  description:
+    '草を2本の資源に分ける（総生産量と総容量は固定）。草食3種は採食の配分だけが違い、' +
+    'A専門・汎用・B専門が同じ世界を分け合う。専門型2種だけなら共存し、' +
+    '個体数は供給比に従う（A=0.5で808対809）。' +
+    'ただし汎用型を30体入れるだけで専門型は両方とも絶滅する。',
+  build: () =>
+    world(
+      [1, 0.5, 0].map((pA, k) =>
+        animal({
+          id: k + 1,
+          name: ['草食・A専門', '草食・汎用', '草食・B専門'][k],
+          color: ['#5ec8f2', '#c9a5f2', '#7fd6a0'][k],
+          eatsGrass: true,
+          resourceA: pA,
+          // 視野0・行動コスト0にしてある。軸は採食の配分1本だけ
+          metabolism: 0.4,
+          gainFromGrass: 4,
+          reproduceThreshold: 20,
+          reproduceProb: 0.08,
+          initialCount: 300,
+        }),
+      ),
+      { grass: { max: 8, regrow: 0.06, initialRatio: 0.5, split: { supplyA: 0.5 } } },
+    ),
+});
+
 export function presetByKey(key: string): Preset {
   const p = presets.find((x) => x.key === key);
   if (!p) throw new Error(`不明なプリセット: ${key}`);
