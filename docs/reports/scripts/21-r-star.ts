@@ -41,6 +41,12 @@ banner();
 const SEEDS = [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000];
 const STEPS = 6000;
 const TAIL = 3000;
+/**
+ * `Trial.grassMean` は草の**総量**なのでセル数で割る。
+ * 最初これをセルあたりと読み違えて、R* を4桁の値として出していた。
+ */
+const CELLS = 120 * 90;
+const perCell = (total: number) => total / CELLS;
 
 /** 実効代謝 = 基礎代謝 + 速度コスト × 速度 + 視野コスト × 視野 */
 function effOf(s: SpeciesDef): number {
@@ -87,7 +93,7 @@ for (const m of [0.4, 0.5, 0.62, 0.8]) {
   console.log(
     `    代謝${m.toFixed(2)}  実効代謝 ${eff.toFixed(3)}  ` +
       `${mark(t)}${t.survived}/${t.total}  ` +
-      `R* ${t.grassMean.toFixed(3)}  R*/実効代謝 ${(t.grassMean / eff).toFixed(3)}  ` +
+      `R* ${perCell(t.grassMean).toFixed(3)}  R*/実効代謝 ${(perCell(t.grassMean) / eff).toFixed(2)}  ` +
       `個体数 ${t.species[0].mean.toFixed(0)}`,
   );
 }
@@ -100,7 +106,7 @@ for (const [key, id] of [['upkeep', 1], ['upkeep', 2]] as const) {
   console.log(
     `    ${s0.name.padEnd(12)} 実効代謝 ${effOf(s0).toFixed(3)}  ` +
       `${mark(t)}${t.survived}/${t.total}  ` +
-      `R* ${t.grassMean.toFixed(3)}  R*/実効代謝 ${(t.grassMean / effOf(s0)).toFixed(3)}  ` +
+      `R* ${perCell(t.grassMean).toFixed(3)}  R*/実効代謝 ${(perCell(t.grassMean) / effOf(s0)).toFixed(2)}  ` +
       `個体数 ${t.species[0].mean.toFixed(0)}`,
   );
 }
