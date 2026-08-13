@@ -164,4 +164,104 @@ for (const m of [0.25, 0.3, 0.325, 0.35, 0.4]) {
   );
 }
 
+// ---------------------------------------------------------------------------
+header('節4: 6000ステップは遅い排除を隠していないか');
+
+/**
+ * 節2・節3 で upkeep のペアが排除されなかったが、R* は 2.577 対 0.528 で
+ * **4.9倍違う**。1本の資源しか制限要因が無いなら、これで共存はできない。
+ *
+ * まず疑うのは走行の長さ。[14](../14-mass-death.md) が
+ * 「8000ステップで 8/8 だった条件が90000ステップでは 2/8」を踏んでいる。
+ * 使う予定の長さで確かめる、が規則。
+ */
+console.log('  upkeep 警戒型 vs 無警戒型（捕食者なし）  8シード');
+for (const steps of [6000, 30000]) {
+  const t = await trial(pair('upkeep', [1, 2]), {
+    seeds: SEEDS,
+    steps,
+    tail: Math.floor(steps / 2),
+  });
+  console.log(
+    `    ${String(steps).padStart(5)}ステップ  ${mark(t)}${t.survived}/${t.total}  ` +
+      t.species.map((s) => `${s.name} ${s.mean.toFixed(0)}(${s.min}-${s.max})`).join('  ') +
+      (t.extinctAt.length > 0 ? `  絶滅 ${t.extinctAt.join(',')}` : ''),
+  );
+}
+
+// ---------------------------------------------------------------------------
+header('節5: 相互に侵入できるか');
+
+/**
+ * **共存の定義そのもの。** 片方が平衡にいるところへ相手を少数だけ入れて、
+ * 増えるか。両方向で増えるなら共存、片方向だけなら途中経過（遅い排除）。
+ *
+ * 初期個体数を 5 にして、相手は既定の300から始める。少数から増えられるかを
+ * 見たいので、[12](../12-invasion.md) と同じく「増えるかどうか」であって
+ * 「勝つかどうか」ではない。
+ */
+console.log('  片方を5体から始める（相手は300体）  8シード / 30000ステップ');
+for (const invader of [1, 2]) {
+  const build = pair('upkeep', [1, 2], (s) => {
+    s.initialCount = s.id === invader ? 5 : 300;
+  });
+  const name = build().species.find((s) => s.id === invader)!.name;
+  const t = await trial(build, { seeds: SEEDS, steps: 30000, tail: 15000 });
+  console.log(
+    `    ${name}が侵入  ${mark(t)}${t.survived}/${t.total}  ` +
+      t.species.map((s) => `${s.name} ${s.mean.toFixed(0)}(${s.min}-${s.max})`).join('  '),
+  );
+}
+
+// ---------------------------------------------------------------------------
+header('節6: 2種は同じ草を食べているか');
+
+/**
+ * 見立ては「**平均 対 上側の裾**」。無警戒型は草の平均に制限されるが、
+ * 警戒型は豊かなセルを選んで食べるので分布の上側に制限される。
+ * 同じ資源でも制限されている量が違うなら、それは制限要因が2つあるということ。
+ *
+ * 直接の証拠として、**各種がいるセルの草の水準**を測る。
+ * 警戒型のいるセルが世界平均より濃ければ、見立ての方向に合う。
+ *
+ * 注意: これは相関であって機構ではない。視野で寄っているのか、
+ * たまたま濃いところに残っているのかは区別できない。
+ */
+const { World } = await import('../../../src/core/world.ts');
+const { step } = await import('../../../src/core/step.ts');
+
+console.log('  各種がいるセルの草 vs 世界平均  4シード / 10000ステップ / 後半2000で集計');
+{
+  const occupied = [0, 0];
+  const occN = [0, 0];
+  let worldGrass = 0;
+  let samples = 0;
+
+  for (const seed of SEEDS.slice(0, 4)) {
+    const cfg = pair('upkeep', [1, 2])();
+    cfg.seed = seed;
+    const w = new World(cfg);
+    for (let i = 0; i < 10000; i++) {
+      step(w);
+      if (i < 8000) continue;
+      samples++;
+      let g = 0;
+      for (let c = 0; c < w.cells; c++) g += w.grass[c];
+      worldGrass += g / w.cells;
+      for (let a = 0; a < w.count; a++) {
+        const si = w.aSpecies[a];
+        occupied[si] += w.grass[w.aY[a] * w.width + w.aX[a]];
+        occN[si]++;
+      }
+    }
+  }
+  const names = pair('upkeep', [1, 2])().species.map((s) => s.name);
+  const mean = worldGrass / samples;
+  console.log(`    世界平均 ${mean.toFixed(3)}`);
+  for (const i of [0, 1]) {
+    const v = occupied[i] / occN[i];
+    console.log(`    ${names[i].padEnd(12)} いるセルの草 ${v.toFixed(3)}  世界平均比 ${(v / mean).toFixed(2)}`);
+  }
+}
+
 await done(t0);
