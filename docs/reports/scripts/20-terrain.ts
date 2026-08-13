@@ -377,6 +377,22 @@ async function sortRow(o: Opts, s: SortOpts = {}): Promise<void> {
   let flat = 0;
   let samples = 0;
   let survived = 0;
+  /**
+   * クラスごとの草の残量とセル数。
+   *
+   * **コストを不均質にすると、資源のほうが打ち消しに回る。** 草は全セル一様に
+   * 回復するので、険しいセルほど個体が減り、減ったぶん食べ残しが溜まる。
+   * 1個体あたりの取り分が増えれば、高いコストはそのぶん埋め戻される。
+   *
+   * これを測らないと「地形が効かなかった」の理由を取り違える。
+   * 個体の平均寿命（約66歩）は30セルを横断する時間（約116歩）より短いので、
+   * **個体は生まれた起伏でだいたい死ぬ**。混ざって平均化されたのではない。
+   */
+  const grassSum = [0, 0, 0];
+  const classCells = [0, 0, 0];
+  // 寿命の目安。個体数 ÷ 1歩あたりの死亡数
+  let deaths = 0;
+  let aliveSamples = 0;
 
   for (const seed of SEEDS_4) {
     const cfg = cfgOf(o);
@@ -395,6 +411,7 @@ async function sortRow(o: Opts, s: SortOpts = {}): Promise<void> {
     const klass = new Uint8Array(w.cells);
     for (let c = 0; c < w.cells; c++) {
       klass[c] = w.terrainWeight[c] < lo ? 0 : w.terrainWeight[c] < hi ? 1 : 2;
+      classCells[klass[c]]++;
     }
 
     for (let i = 0; i < STEPS; i++) {
@@ -403,6 +420,8 @@ async function sortRow(o: Opts, s: SortOpts = {}): Promise<void> {
       samples++;
       paid += w.terrainCostPaid;
       flat += w.terrainCostFlat;
+      for (let c = 0; c < w.cells; c++) grassSum[klass[c]] += w.grass[c];
+      deaths += w.deathsEaten[0] + w.deathsOther[0];
       for (let a = 0; a < w.count; a++) {
         const si = w.aSpecies[a];
         if (si > 1) continue;
@@ -413,6 +432,7 @@ async function sortRow(o: Opts, s: SortOpts = {}): Promise<void> {
         spdSq[si][k] += v * v;
         spdN[si][k]++;
         hist[si][k][Math.min(BINS - 1, Math.max(0, Math.round(v / BIN)))]++;
+        if (si === 0) aliveSamples++;
       }
     }
     let alive = 0;
@@ -454,6 +474,18 @@ async function sortRow(o: Opts, s: SortOpts = {}): Promise<void> {
     });
     console.log(`      分布(5/25/50/95%)  ${cols.join('  ')}`);
   }
+
+  // 資源の打ち消し。険しいセルほど個体が減り、食べ残しが溜まる。
+  // 1個体あたりの取り分が増えれば高いコストはそのぶん埋め戻される
+  // classCells はシードごとに足し込まれるので、1世界あたりに直す
+  const perCell = (k: number) => grassSum[k] / samples / (classCells[k] / SEEDS_4.length);
+  // 分母分子とも同じ (seed, step) の集合で足しているので、そのまま比が取れる
+  const perHead = (k: number) => grassSum[k] / pop[0][k];
+  console.log(
+    `      草/セル 平${perCell(0).toFixed(3)} 中${perCell(1).toFixed(3)} 険${perCell(2).toFixed(3)}  ` +
+      `草/個体 平${perHead(0).toFixed(1)} 中${perHead(1).toFixed(1)} 険${perHead(2).toFixed(1)}  ` +
+      `平均寿命 ${(aliveSamples / deaths).toFixed(0)}歩`,
+  );
 }
 
 /** ヒストグラムから分位点を読む。境界は線形補間せずビンの中心を返す */
