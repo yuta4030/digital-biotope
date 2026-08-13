@@ -126,6 +126,21 @@ export class World {
   readonly deathsEaten: Int32Array;
   readonly deathsOther: Int32Array;
   /**
+   * 直前のステップに種インデックス別で、草を食べた量と食べた回数。毎ステップ上書きする。
+   *
+   * 比が「1回の採食で取れた量」で、採食量の上限(4)より残量(約1)のほうが小さいので、
+   * 実質**食べた瞬間のセルの草**になる。
+   *
+   * これは step の外からは測れない。個体は自分のセルの草を食べ切るので、
+   * step 後に個体のいるセルを見ると必ず0になる（21 でそれを踏んだ）。
+   *
+   * 要る理由は、視野を持つ種と持たない種が**草の分布の違う部分**を消費している
+   * かどうかの判定。同じ資源でも制限されている統計量が違うなら、
+   * 制限要因は1つではない。
+   */
+  readonly grazeAmount: Float64Array;
+  readonly grazeCount: Int32Array;
+  /**
    * 大量死で取り除いた数。種インデックス別で、毎ステップ上書きする。
    *
    * 餓死・寿命死（deathsOther）と混ぜない。大量死は設計上の割合と実現値が
@@ -268,6 +283,8 @@ export class World {
     this.effMetabolism = new Float64Array(n);
     this.deathsEaten = new Int32Array(n);
     this.deathsOther = new Int32Array(n);
+    this.grazeAmount = new Float64Array(n);
+    this.grazeCount = new Int32Array(n);
     this.deathsDisturbance = new Int32Array(n);
 
     // 対象の種は構築時に固定する。id からインデックスへの変換をここで済ませておけば

@@ -221,19 +221,23 @@ header('節6: 2種は同じ草を食べているか');
  * 警戒型は豊かなセルを選んで食べるので分布の上側に制限される。
  * 同じ資源でも制限されている量が違うなら、それは制限要因が2つあるということ。
  *
- * 直接の証拠として、**各種がいるセルの草の水準**を測る。
- * 警戒型のいるセルが世界平均より濃ければ、見立ての方向に合う。
+ * 直接の証拠として、**1回の採食で取れた量**を種別に測る。採食量の上限(4)より
+ * 残量(約1)のほうが小さいので、これは実質「食べた瞬間のセルの草」。
  *
- * 注意: これは相関であって機構ではない。視野で寄っているのか、
- * たまたま濃いところに残っているのかは区別できない。
+ * **step の外からは測れない。** 最初はステップ後に個体のいるセルを見たが、
+ * 個体は自分のセルを食べ切るので両種とも 0.000 になった。
+ * World に採食の計器（grazeAmount / grazeCount）を足してある。
+ *
+ * 注意: これは相関であって機構ではない。視野で濃いセルへ寄っているのか、
+ * たまたま濃いところで食べているのかは、この数字だけでは区別できない。
  */
 const { World } = await import('../../../src/core/world.ts');
 const { step } = await import('../../../src/core/step.ts');
 
-console.log('  各種がいるセルの草 vs 世界平均  4シード / 10000ステップ / 後半2000で集計');
+console.log('  1回の採食で取れた量 vs 世界平均  4シード / 10000ステップ / 後半2000で集計');
 {
-  const occupied = [0, 0];
-  const occN = [0, 0];
+  const amount = [0, 0];
+  const events = [0, 0];
   let worldGrass = 0;
   let samples = 0;
 
@@ -248,19 +252,20 @@ console.log('  各種がいるセルの草 vs 世界平均  4シード / 10000�
       let g = 0;
       for (let c = 0; c < w.cells; c++) g += w.grass[c];
       worldGrass += g / w.cells;
-      for (let a = 0; a < w.count; a++) {
-        const si = w.aSpecies[a];
-        occupied[si] += w.grass[w.aY[a] * w.width + w.aX[a]];
-        occN[si]++;
+      for (const si of [0, 1]) {
+        amount[si] += w.grazeAmount[si];
+        events[si] += w.grazeCount[si];
       }
     }
   }
   const names = pair('upkeep', [1, 2])().species.map((s) => s.name);
   const mean = worldGrass / samples;
-  console.log(`    世界平均 ${mean.toFixed(3)}`);
+  console.log(`    世界平均（セルあたりの残量） ${mean.toFixed(3)}`);
   for (const i of [0, 1]) {
-    const v = occupied[i] / occN[i];
-    console.log(`    ${names[i].padEnd(12)} いるセルの草 ${v.toFixed(3)}  世界平均比 ${(v / mean).toFixed(2)}`);
+    const v = amount[i] / events[i];
+    console.log(
+      `    ${names[i].padEnd(12)} 1回の採食 ${v.toFixed(3)}  世界平均比 ${(v / mean).toFixed(2)}`,
+    );
   }
 }
 

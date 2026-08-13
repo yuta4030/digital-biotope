@@ -502,6 +502,8 @@ function moveOne(w: World, i: number): void {
 function feed(w: World): void {
   w.deathsEaten.fill(0);
   w.deathsOther.fill(0);
+  w.grazeAmount.fill(0);
+  w.grazeCount.fill(0);
 
   const nSpecies = w.defs.length;
   const order = w.order;
@@ -544,6 +546,13 @@ function feed(w: World): void {
         const eaten = avail < def.gainFromGrass ? avail : def.gainFromGrass;
         w.grass[c] = avail - eaten;
         w.aEnergy[i] += eaten;
+        // 種別に「1回の採食で取れた量」を数える。採食量の上限(4)より
+        // 残量(約1)のほうが小さいので、これは実質「食べた瞬間のセルの草」。
+        // 21 で、視野を持つ種と持たない種が草の分布の違う部分を消費している
+        // （平均 対 上側の裾）かを判定するために要る。step の外からは測れない
+        // ——個体は自分のセルを食べ切るので、step 後に見ると必ず0になる
+        w.grazeAmount[si] += eaten;
+        w.grazeCount[si]++;
       }
     }
   }
