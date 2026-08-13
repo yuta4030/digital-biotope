@@ -351,6 +351,28 @@ async function sortRow(o: Opts, s: SortOpts = {}): Promise<void> {
     [0, 0, 0],
     [0, 0, 0],
   ];
+  /**
+   * 地形クラスごとの速度の**分布**。平均だけでは「山に居着いた遅い個体群」が
+   * 通過中の速い個体に薄められて見えない。
+   *
+   * 10 が集団全体で標準偏差を出したのと同じ理由（`world.ts` の speedStats:
+   * 平均だけでは1点に集まっているのか二群に割れているのかが区別できない）を、
+   * クラス別にも当てる。第1回はここを外していた。
+   *
+   * 全サンプルを持つと数百万件になるのでヒストグラムに畳む。
+   * 幅0.05・上限4.0（mutation の speedMax と同じ）。
+   */
+  const BIN = 0.05;
+  const BINS = Math.round(4 / BIN) + 1;
+  const hist = [
+    [new Float64Array(BINS), new Float64Array(BINS), new Float64Array(BINS)],
+    [new Float64Array(BINS), new Float64Array(BINS), new Float64Array(BINS)],
+  ];
+  // クラス別の標準偏差用。二群に割れていれば平均が同じでもここが跳ねる
+  const spdSq = [
+    [0, 0, 0],
+    [0, 0, 0],
+  ];
   let paid = 0;
   let flat = 0;
   let samples = 0;
@@ -385,9 +407,12 @@ async function sortRow(o: Opts, s: SortOpts = {}): Promise<void> {
         const si = w.aSpecies[a];
         if (si > 1) continue;
         const k = klass[w.aY[a] * w.width + w.aX[a]];
+        const v = w.aSpeed[a];
         pop[si][k]++;
-        spd[si][k] += w.aSpeed[a];
+        spd[si][k] += v;
+        spdSq[si][k] += v * v;
         spdN[si][k]++;
+        hist[si][k][Math.min(BINS - 1, Math.max(0, Math.round(v / BIN)))]++;
       }
     }
     let alive = 0;
@@ -412,4 +437,32 @@ async function sortRow(o: Opts, s: SortOpts = {}): Promise<void> {
       `      ${''.padEnd(22)}      ${row3('肉食', 1, per, 1)}  ${row3('速度', 1, avg, 2)}`,
     );
   }
+
+  // 分布。少数派が居着いているなら、平均が同じでも下側の分位と
+  // 標準偏差に出る。速度固定の構成では意味がないので飛ばす
+  if (s.fixSpeed === undefined) {
+    const names = ['平', '中', '険'];
+    const cols = [0, 1, 2].map((k) => {
+      const n = spdN[0][k];
+      const mean = spd[0][k] / n;
+      const sd = Math.sqrt(Math.max(0, spdSq[0][k] / n - mean * mean));
+      const q = (p: number) => quantile(hist[0][k], n, p, BIN);
+      return (
+        `${names[k]} sd${sd.toFixed(2)} ` +
+        `[${q(0.05).toFixed(2)} ${q(0.25).toFixed(2)} ${q(0.5).toFixed(2)} ${q(0.95).toFixed(2)}]`
+      );
+    });
+    console.log(`      分布(5/25/50/95%)  ${cols.join('  ')}`);
+  }
+}
+
+/** ヒストグラムから分位点を読む。境界は線形補間せずビンの中心を返す */
+function quantile(h: Float64Array, n: number, p: number, bin: number): number {
+  const target = n * p;
+  let acc = 0;
+  for (let i = 0; i < h.length; i++) {
+    acc += h[i];
+    if (acc >= target) return i * bin;
+  }
+  return (h.length - 1) * bin;
 }
