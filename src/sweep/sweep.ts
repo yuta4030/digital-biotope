@@ -118,21 +118,30 @@ function avg(xs: number[]): number {
 }
 
 /**
- * 複数試行の速度をまとめる。測れた試行が1つも無ければ、
+ * 複数試行の遺伝形質（速度・視野）をまとめる。測れた試行が1つも無ければ、
  * 定義値をそのまま返したうえで speedSamples を0にして知らせる。
+ * 標本数は速度と視野で共通（run.ts で同じ刻みに取っている）。
  */
 function speedOver(
   rs: SpeciesResult[],
-): Pick<SpeciesResult, 'speedMean' | 'speedSd' | 'speedSamples'> {
+): Pick<SpeciesResult, 'speedMean' | 'speedSd' | 'speedSamples' | 'visionMean' | 'visionSd'> {
   const measured = rs.filter((r) => r.speedSamples > 0);
   const samples = rs.reduce((a, r) => a + r.speedSamples, 0);
   if (measured.length === 0) {
-    return { speedMean: rs[0].speedMean, speedSd: 0, speedSamples: 0 };
+    return {
+      speedMean: rs[0].speedMean,
+      speedSd: 0,
+      speedSamples: 0,
+      visionMean: rs[0].visionMean,
+      visionSd: 0,
+    };
   }
   return {
     speedMean: avg(measured.map((r) => r.speedMean)),
     speedSd: avg(measured.map((r) => r.speedSd)),
     speedSamples: samples,
+    visionMean: avg(measured.map((r) => r.visionMean)),
+    visionSd: avg(measured.map((r) => r.visionSd)),
   };
 }
 

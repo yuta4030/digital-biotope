@@ -395,16 +395,22 @@ function findGrass(w: World, x: number, y: number, r: number, current: number): 
 }
 
 /**
- * 連続値の速度を、そのステップで実際に動くセル数（整数）に落とす。
+ * 連続値の形質を、そのステップで実際に使う整数（移動セル数・走査半径）に落とす。
  *
- * 格子の上では半セル進むことが出来ないので、端数は確率で繰り上げる。
- * 速度1.4なら10回のうち4回は2セル、6回は1セル動き、平均は1.4セルになる。
+ * 格子の上では半セル進むことも半セル先を見ることも出来ないので、端数は確率で
+ * 繰り上げる。速度1.4なら10回のうち4回は2セル、6回は1セル動き、平均は1.4セルになる。
  * 切り捨てにすると 1.0 と 1.9 の個体が全く同じ動きをしてしまい、
  * 実効代謝だけが違うことになるので、速いほど不利という結果しか出なくなる。
  *
+ * **視野でも同じことが起きる**、しかもより悪い形で。切り捨てなら 1.0〜1.99 の
+ * 個体は全員が半径1で、その区間では利益が同じまま代償だけ増える。集団は必ず
+ * 区間の下端へ押され、崖を落ちて次の区間の下端へ、と繰り返して視野0に着く——
+ * 格子の刻み方だけで決まる結末を「見る価値は無かった」と読むことになる
+ * （03 で3回踏んだ「実装の都合が生態系の挙動として観察される」）。
+ *
  * 端数が無いときは乱数を引かない。変異を使わない構成の結果を変えないため。
  */
-function stepSpeed(w: World, v: number): number {
+function quantize(w: World, v: number): number {
   const base = Math.floor(v);
   const frac = v - base;
   return frac > 0 && w.rng.chance(frac) ? base + 1 : base;
@@ -432,7 +438,9 @@ function moveAgents(w: World): void {
   }
 
   for (let s = 0; s < w.defs.length; s++) {
-    if (w.defs[s].visionRange > 0) w.buildSpatialIndex();
+    // 定数が0でも遺伝で視野を持ちうる種があるので visionCapable で判定する。
+    // visionRange > 0 で見ると、視野が遺伝する種の手番だけインデックスが古くなる
+    if (w.visionCapable[s] === 1) w.buildSpatialIndex();
     for (let i = 0; i < w.count; i++) {
       if (w.aSpecies[i] === s) moveOne(w, i);
     }
@@ -470,12 +478,13 @@ function decideDirection(w: World, i: number, si: number, x: number, y: number, 
 function moveOne(w: World, i: number): void {
   const si = w.aSpecies[i];
   const def = w.defs[si];
-  const speed = stepSpeed(w, w.aSpeed[i]);
+  const speed = quantize(w, w.aSpeed[i]);
   if (speed === 0) return;
 
   const x = w.aX[i];
   const y = w.aY[i];
-  const r = def.visionRange;
+  // 視野が遺伝しない種は定義値をそのまま使い、乱数を1つも引かない
+  const r = w.visionMutating[si] === 1 ? quantize(w, w.aVision[i]) : def.visionRange;
   let dx = 0;
   let dy = 0;
 
@@ -504,10 +513,15 @@ function feed(w: World): void {
   w.deathsOther.fill(0);
   w.grazeAmount.fill(0);
   w.grazeCount.fill(0);
+  w.visionSumEaten.fill(0);
+  w.visionSumOther.fill(0);
 
   const nSpecies = w.defs.length;
   const order = w.order;
   const count = w.count;
+  // 前のステップの採食量を消す。食べなかった個体を0で表すので、
+  // 消し忘れると「毎ステップ食べている」ことになる
+  w.aGrazed.fill(0, 0, count);
 
   for (let i = 0; i < count; i++) order[i] = i;
   w.rng.shuffle(order, count);
@@ -532,6 +546,8 @@ function feed(w: World): void {
         if (def.captureRate >= 1 || w.rng.chance(def.captureRate)) {
           w.aAlive[j] = 0;
           w.deathsEaten[w.aSpecies[j]]++;
+          // 食われた側の視野を足す。集団平均との差が「見れば逃げられる」の実測値
+          w.visionSumEaten[w.aSpecies[j]] += w.aVision[j];
           w.aEnergy[i] += def.gainFromPrey;
           ate = true;
         }
@@ -553,6 +569,9 @@ function feed(w: World): void {
         // ——個体は自分のセルを食べ切るので、step 後に見ると必ず0になる
         w.grazeAmount[si] += eaten;
         w.grazeCount[si]++;
+        // 同じ量を個体別にも残す。視野が同じ種の中で違う構成では、
+        // 種別の合計だけでは「誰が濃いセルを取っているか」が見えない
+        w.aGrazed[i] = eaten;
       }
     }
   }
@@ -590,7 +609,9 @@ function metabolize(w: World): void {
     const si = w.aSpecies[i];
     const def = w.defs[si];
 
-    let charge = mutating ? w.effectiveMetabolismFor(si, w.aSpeed[i]) : cost[si];
+    let charge = mutating
+      ? w.effectiveMetabolismFor(si, w.aSpeed[i], w.aVision[i])
+      : cost[si];
     if (terrain && w.terrainTargetSpecies[si] === 1) {
       // 平坦な場合との差分だけを足す。倍率1のセルでは差が0になるので、
       // contrast=0 の走行が地形を入れる前と完全に一致する
@@ -607,6 +628,9 @@ function metabolize(w: World): void {
     if (w.aEnergy[i] <= 0) {
       w.aAlive[i] = 0;
       w.deathsOther[si]++;
+      // 餓死した側の視野。被捕食（visionSumEaten）と逆を向くはずの選択差で、
+      // 正味だけ見ていると打ち消し合ってどちらも効いていないように見える
+      w.visionSumOther[si] += w.aVision[i];
       if (def.corpseGrass > 0) dropCorpse(w, def.corpseGrass, def.corpseSpread, w.aX[i], w.aY[i]);
       continue;
     }
@@ -616,6 +640,7 @@ function metabolize(w: World): void {
     if (def.maxAge > 0 && age >= def.maxAge) {
       w.aAlive[i] = 0;
       w.deathsOther[si]++;
+      w.visionSumOther[si] += w.aVision[i];
       if (def.corpseGrass > 0) dropCorpse(w, def.corpseGrass, def.corpseSpread, w.aX[i], w.aY[i]);
     }
   }
@@ -659,6 +684,23 @@ function childSpeed(w: World, def: SpeciesDef, parent: number): number {
   return v;
 }
 
+/**
+ * 子が受け継ぐ視野。速度と同じ形。
+ *
+ * 速度と別の関数にしてあるのは、片方だけを遺伝させる構成を作れるようにするため。
+ * 両方を指定した種では **速度 → 視野の順に引く**。順序を決めておかないと、
+ * 片方だけ有効にした走行ともう片方を足した走行で乱数列の対応が取れなくなる。
+ */
+function childVision(w: World, def: SpeciesDef, parent: number): number {
+  const m = def.visionMutation;
+  if (m === undefined) return parent;
+
+  const v = parent + w.rng.normal() * m.sigma;
+  if (v < m.min) return m.min;
+  if (v > m.max) return m.max;
+  return v;
+}
+
 function reproduce(w: World): void {
   // 生まれた子をその場で走査対象にしないよう、開始時点の個体数で止める
   const n = w.count;
@@ -669,7 +711,10 @@ function reproduce(w: World): void {
     if (!w.rng.chance(def.reproduceProb)) continue;
 
     const childEnergy = w.aEnergy[i] * def.reproduceCost;
-    if (w.spawn(si, w.aX[i], w.aY[i], childEnergy, childSpeed(w, def, w.aSpeed[i]))) {
+    // 引数は左から評価されるので、乱数は速度 → 視野の順に引かれる
+    const speed = childSpeed(w, def, w.aSpeed[i]);
+    const vision = childVision(w, def, w.aVision[i]);
+    if (w.spawn(si, w.aX[i], w.aY[i], childEnergy, speed, vision)) {
       w.aEnergy[i] -= childEnergy;
     }
   }

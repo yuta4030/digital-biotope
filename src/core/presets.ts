@@ -411,6 +411,59 @@ presets.push({
     ]),
 });
 
+presets.push({
+  key: 'vision',
+  label: '進化（視野が遺伝する）',
+  description:
+    '「燃費」構成の草食2種を1種に畳んで、視野を個体ごとの遺伝形質にしたもの。' +
+    'パラメータは燃費構成の草食とまったく同じなので、視野0の個体は無警戒型（実効代謝0.40）、' +
+    '視野3の個体は警戒型（0.475）にぴったり一致する。' +
+    '21 が「視野の有無が2本目のニッチ軸を作っている」ところまで出したので、' +
+    'その軸が変異から出てくるか——集団が二山に割れるか——を見るための構成。',
+  build: () =>
+    world([
+      animal({
+        id: 1,
+        name: '草食動物',
+        color: '#5ec8f2',
+        eatsGrass: true,
+        // 以下は upkeep の草食2種と同一。視野だけが個体ごとに動く
+        metabolism: 0.25,
+        speedCost: 0.15,
+        visionCost: 0.025,
+        gainFromGrass: 4,
+        reproduceThreshold: 20,
+        reproduceProb: 0.08,
+        // 速度は固定する。軸は1本ずつ足す（速度は 10 で測り終えている）
+        speed: 1,
+        visionRange: 0,
+        // σは 10 の速度と同じ値。上限5は「代償があれば張り付かない」ことを
+        // 示せるだけの高さで、これ以上は走査が (2r+1)^2 で重くなるだけ
+        visionMutation: { sigma: 0.05, min: 0, max: 5 },
+        // upkeep の草食2種の合計に合わせる
+        initialCount: 600,
+      }),
+      // upkeep・evolution とまったく同じ肉食。捕食圧の条件を揃えるため
+      animal({
+        id: 2,
+        name: '肉食動物',
+        color: '#f2615e',
+        preys: [1],
+        metabolism: 0.2,
+        speedCost: 0.15,
+        visionCost: 0.025,
+        gainFromPrey: 18,
+        captureRate: 0.04,
+        reproduceThreshold: 40,
+        reproduceProb: 0.06,
+        speed: 2,
+        visionRange: 3,
+        initialCount: 40,
+        initialEnergy: 25,
+      }),
+    ]),
+});
+
 export function presetByKey(key: string): Preset {
   const p = presets.find((x) => x.key === key);
   if (!p) throw new Error(`不明なプリセット: ${key}`);

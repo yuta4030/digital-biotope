@@ -48,10 +48,25 @@ export class World {
   readonly predatorBits: Uint32Array;
   /** 視界を持つ種が1つでもあるか。無ければ移動前のインデックス構築を省く */
   readonly anyVision: boolean;
+  /**
+   * 種インデックス別に、視界を使いうるか（1/0）。
+   *
+   * 定数の visionRange が0でも visionMutation を持つ種は使いうるので、
+   * `visionRange > 0` では判定できない。移動の順序（獲物→捕食者の間に
+   * インデックスを組み直す）はこちらで決める。
+   */
+  readonly visionCapable: Uint8Array;
+  /** 種インデックス別に、視野が遺伝するか（1/0）。個体ごとの走査半径を引く判定に使う */
+  readonly visionMutating: Uint8Array;
   /** 死骸を戻す種が1つでもあるか。無ければ在庫の走査を丸ごと省く */
   readonly anyCorpse: boolean;
-  /** 速度を遺伝させる種が1つでもあるか。無ければ代謝を種別に1回引くだけで済む */
+  /**
+   * 速度**または**視野を遺伝させる種が1つでもあるか。
+   * 無ければ実効代謝を種別に1回引くだけで済む。
+   */
   readonly anyMutation: boolean;
+  /** 視野を遺伝させる種が1つでもあるか。視野の統計を取るかどうかの判定に使う */
+  readonly anyVisionMutation: boolean;
   /** 種別の実効代謝。スライダーで随時変わるので毎ステップ引き直す */
   readonly effMetabolism: Float64Array;
 
@@ -125,6 +140,21 @@ export class World {
    */
   readonly deathsEaten: Int32Array;
   readonly deathsOther: Int32Array;
+  /**
+   * 直前のステップに死んだ個体の**視野の合計**。死因ごとに分けて、種インデックス別。
+   * `deathsEaten` / `deathsOther` で割ると死んだ側の平均視野になる。
+   *
+   * 集団の平均視野（visionStats）との差が、その死因が視野にかけている選択差そのもの。
+   * これを分けて数えないと「視野が上がった／下がった」の**理由**が言えない——
+   * 見えれば逃げられる（被捕食を減らす）と、見る代償で先に飢える（餓死を増やす）は
+   * 逆を向いていて、正味だけ見てもどちらがどれだけ効いたのか分からない。
+   * 08 で `grassAdded` と `grassFromCorpses` を分けたのと同じ形の計測器。
+   *
+   * 数えるのは被捕食（feed）と餓死・寿命（metabolize）だけ。
+   * 大量死・密度依存・感染は形質を見ない死なので、混ぜると選択差が薄まる。
+   */
+  readonly visionSumEaten: Float64Array;
+  readonly visionSumOther: Float64Array;
   /**
    * 直前のステップに種インデックス別で、草を食べた量と食べた回数。毎ステップ上書きする。
    *
@@ -225,6 +255,24 @@ export class World {
    * spawn / compact / speedStats の3箇所を揃える。
    */
   readonly aSpeed: Float32Array;
+  /**
+   * 個体ごとの視野。visionMutation を持たない種では常に定義値と等しい。
+   * 走査半径は整数なので、使うときに端数を確率で繰り上げる（step.ts の quantize）。
+   * 代償のほうはこの連続値のまま実効代謝に乗る。
+   */
+  readonly aVision: Float32Array;
+  /**
+   * 直前のステップにその個体が食べた草の量。食べなかった個体は0。
+   *
+   * 種別の合計（grazeAmount / grazeCount）では**同じ種の中で視野が違う個体**を
+   * 分けられない。21 が種をまたいで見つけた「無警戒型は94%の歩で0.423ずつ、
+   * 警戒型は46%の歩で1.032ずつ」が、1つの種の中の連続した視野の軸の上でも
+   * 成り立つのかを見るには、個体ごとに要る。
+   *
+   * step の外からは測れない。個体は自分のセルの草を食べ切るので、
+   * step 後にセルを見ると必ず0になる（21 でそれを踏んだ）。
+   */
+  readonly aGrazed: Float32Array;
   /** 0 になった個体はそのステップの終わりに取り除かれる */
   readonly aAlive: Uint8Array;
 
@@ -238,7 +286,8 @@ export class World {
   /** 反復順をシャッフルするための作業配列。処理順による偏りを避ける */
   readonly order: Int32Array;
 
-  // speedStats の集計先。毎ステップ呼ぶので確保し直さない
+  // traitStats の集計先。毎ステップ呼ぶので確保し直さない。
+  // 速度と視野で使い回すが、1回の呼び出しの中で閉じるので混ざらない
   private readonly speedSum: Float64Array;
   private readonly speedSqSum: Float64Array;
   private readonly speedCount: Float64Array;
@@ -277,12 +326,25 @@ export class World {
       }
     });
 
-    this.anyVision = this.defs.some((d) => d.visionRange > 0 && d.speed > 0);
+    // 視野は「定数が0でも遺伝で0を超えうる」ので、種ごとに使いうるかを先に畳んでおく。
+    // 上限0の変異（対照）は視野を使えないので capable に数えない
+    this.visionCapable = new Uint8Array(n);
+    this.visionMutating = new Uint8Array(n);
+    this.defs.forEach((d, i) => {
+      const vm = d.visionMutation;
+      this.visionMutating[i] = vm !== undefined ? 1 : 0;
+      this.visionCapable[i] = d.visionRange > 0 || (vm !== undefined && vm.max > 0) ? 1 : 0;
+    });
+    this.anyVision = this.defs.some((d, i) => this.visionCapable[i] === 1 && d.speed > 0);
     this.anyCorpse = this.defs.some((d) => d.corpseGrass > 0);
-    this.anyMutation = this.defs.some((d) => d.mutation !== undefined);
+    this.anyVisionMutation = this.defs.some((d) => d.visionMutation !== undefined);
+    this.anyMutation =
+      this.defs.some((d) => d.mutation !== undefined) || this.anyVisionMutation;
     this.effMetabolism = new Float64Array(n);
     this.deathsEaten = new Int32Array(n);
     this.deathsOther = new Int32Array(n);
+    this.visionSumEaten = new Float64Array(n);
+    this.visionSumOther = new Float64Array(n);
     this.grazeAmount = new Float64Array(n);
     this.grazeCount = new Int32Array(n);
     this.deathsDisturbance = new Int32Array(n);
@@ -343,6 +405,8 @@ export class World {
     this.aEnergy = new Float32Array(this.capacity);
     this.aAge = new Uint16Array(this.capacity);
     this.aSpeed = new Float32Array(this.capacity);
+    this.aVision = new Float32Array(this.capacity);
+    this.aGrazed = new Float32Array(this.capacity);
     this.aAlive = new Uint8Array(this.capacity);
     this.aInfected = new Uint8Array(this.capacity);
     this.aInfectedNext = new Uint8Array(this.capacity);
@@ -515,10 +579,17 @@ export class World {
 
   /**
    * 個体を1体追加する。容量超過なら false。
-   * speed を省くと種の定義値になる。初期個体は全員この値で揃うので、
+   * speed / vision を省くと種の定義値になる。初期個体は全員この値で揃うので、
    * 変異のある構成では「1点から出発してどこへ動くか」を見ることになる。
    */
-  spawn(speciesIdx: number, x: number, y: number, energy: number, speed?: number): boolean {
+  spawn(
+    speciesIdx: number,
+    x: number,
+    y: number,
+    energy: number,
+    speed?: number,
+    vision?: number,
+  ): boolean {
     if (this.count >= this.capacity) return false;
     const i = this.count++;
     this.aSpecies[i] = speciesIdx;
@@ -527,6 +598,10 @@ export class World {
     this.aEnergy[i] = energy;
     this.aAge[i] = 0;
     this.aSpeed[i] = speed ?? this.defs[speciesIdx].speed;
+    this.aVision[i] = vision ?? this.defs[speciesIdx].visionRange;
+    // 繁殖は feed より後なので、生まれた子はこのステップに食べていない。
+    // 使い回した添字に前の個体の値が残ると、視野別の採食統計が汚れる
+    this.aGrazed[i] = 0;
     this.aAlive[i] = 1;
     // 子は必ず未感染で生まれる（垂直感染は入れていない）。
     // 使い回した添字に前の個体の状態が残らないよう、必ず書き戻す
@@ -564,7 +639,7 @@ export class World {
 
   /** 死亡個体を取り除いて [0, count) を詰める */
   compact(): void {
-    const { aSpecies, aX, aY, aEnergy, aAge, aSpeed, aAlive, aInfected } = this;
+    const { aSpecies, aX, aY, aEnergy, aAge, aSpeed, aVision, aGrazed, aAlive, aInfected } = this;
     let n = this.count;
     let i = 0;
     while (i < n) {
@@ -581,6 +656,10 @@ export class World {
         aEnergy[i] = aEnergy[n];
         aAge[i] = aAge[n];
         aSpeed[i] = aSpeed[n];
+        aVision[i] = aVision[n];
+        // 詰めた後に視野別の採食を集計するので、これも一緒に動かさないと
+        // 「誰がどれだけ食べたか」の対応がずれる
+        aGrazed[i] = aGrazed[n];
         aAlive[i] = aAlive[n];
         aInfected[i] = aInfected[n];
       }
@@ -590,16 +669,22 @@ export class World {
 
   /** 実効代謝 = 基礎代謝 + 速度コスト × 速度 + 視野コスト × 視野 */
   effectiveMetabolism(speciesIdx: number): number {
-    return this.effectiveMetabolismFor(speciesIdx, this.defs[speciesIdx].speed);
+    const d = this.defs[speciesIdx];
+    return this.effectiveMetabolismFor(speciesIdx, d.speed, d.visionRange);
   }
 
   /**
-   * 速度を指定して実効代謝を求める。速度が個体ごとに違う構成で使う。
-   * 速いことの代償はここにしか無いので、speedCost が0だと選択が働かない。
+   * 速度と視野を指定して実効代謝を求める。形質が個体ごとに違う構成で使う。
+   * 速いこと・見ることの代償はここにしか無いので、
+   * speedCost / visionCost が0だとその形質に選択が働かない。
+   *
+   * 視野は**連続値のまま**乗る。走査半径は整数に落とすが（quantize）、
+   * 代償まで整数にすると同じ半径の区間で代償が同じになり、
+   * 区間の中で選択が働かなくなって集団が区間内を漂う。
    */
-  effectiveMetabolismFor(speciesIdx: number, speed: number): number {
+  effectiveMetabolismFor(speciesIdx: number, speed: number, vision?: number): number {
     const d = this.defs[speciesIdx];
-    return d.metabolism + d.speedCost * speed + d.visionCost * d.visionRange;
+    return d.metabolism + d.speedCost * speed + d.visionCost * (vision ?? d.visionRange);
   }
 
   /**
@@ -625,11 +710,28 @@ export class World {
   /**
    * 種インデックス別の速度の平均と標準偏差を out に書き込む。O(個体数)。
    * 個体がいない種は両方 0。
-   *
-   * 標準偏差を出すのは、平均だけでは「集団が1点に集まっている」のか
-   * 「速い個体と遅い個体に割れている」のかが区別できないため。
    */
   speedStats(mean: Float64Array, sd: Float64Array): void {
+    this.traitStats(this.aSpeed, mean, sd);
+  }
+
+  /**
+   * 同じものを視野について。速度と別々に呼べるようにしてあるのは、
+   * どちらか片方だけを遺伝させる構成を作るため。
+   */
+  visionStats(mean: Float64Array, sd: Float64Array): void {
+    this.traitStats(this.aVision, mean, sd);
+  }
+
+  /**
+   * 種インデックス別の形質の平均と標準偏差。
+   *
+   * 標準偏差を出すのは、平均だけでは「集団が1点に集まっている」のか
+   * 「大きい個体と小さい個体に割れている」のかが区別できないため。
+   * **ただし標準偏差でも足りない**（20 で踏んだ）。二山かどうかは分布そのものを
+   * 見るしかないので、判定に使うのは run.ts のヒストグラム。
+   */
+  private traitStats(value: Float32Array, mean: Float64Array, sd: Float64Array): void {
     const { speedSum: sum, speedSqSum: sq, speedCount: cnt } = this;
     sum.fill(0);
     sq.fill(0);
@@ -637,7 +739,7 @@ export class World {
 
     for (let i = 0; i < this.count; i++) {
       const s = this.aSpecies[i];
-      const v = this.aSpeed[i];
+      const v = value[i];
       sum[s] += v;
       sq[s] += v * v;
       cnt[s]++;
