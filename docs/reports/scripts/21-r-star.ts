@@ -269,4 +269,92 @@ console.log('  1回の採食で取れた量 vs 世界平均  4シード / 10000�
   }
 }
 
+// ---------------------------------------------------------------------------
+header('節7: 採食の頻度は予測どおりか');
+
+/**
+ * 節6 の数字（1回の採食で 1.032 対 0.423）は**成功したときの量**で、
+ * 歩あたりの摂取ではない。`grazeCount` は草が0のセルを数えていないため。
+ *
+ * 平衡では死骸も捕食も無いので、**1個体あたりの摂取は実効代謝と釣り合う**はず。
+ * だとすると採食に成功する歩の割合は
+ *
+ *     警戒型   0.475 ÷ 1.032 = 46%
+ *     無警戒型 0.400 ÷ 0.423 = 95%
+ *
+ * になる。**無警戒型は95%の歩で小さく食べ、警戒型は46%の歩で2.4倍大きく食べる。**
+ * 合計は同じで、制限しているものだけが違う——無警戒型は「草のあるセルの密度」、
+ * 警戒型は「濃いセルの密度」。
+ *
+ * ここで直接測る。外れたら、節6 の解釈をやり直すことになる。
+ */
+console.log('  歩あたりの摂取と採食頻度  4シード / 10000ステップ / 後半2000で集計');
+{
+  const amount = [0, 0];
+  const events = [0, 0];
+  const popSum = [0, 0];
+
+  for (const seed of SEEDS.slice(0, 4)) {
+    const cfg = pair('upkeep', [1, 2])();
+    cfg.seed = seed;
+    const w = new World(cfg);
+    const pop = new Int32Array(2);
+    for (let i = 0; i < 10000; i++) {
+      step(w);
+      if (i < 8000) continue;
+      pop.fill(0);
+      for (let a = 0; a < w.count; a++) if (w.aSpecies[a] < 2) pop[w.aSpecies[a]]++;
+      for (const si of [0, 1]) {
+        amount[si] += w.grazeAmount[si];
+        events[si] += w.grazeCount[si];
+        popSum[si] += pop[si];
+      }
+    }
+  }
+  const cfg = pair('upkeep', [1, 2])();
+  for (const i of [0, 1]) {
+    const s = cfg.species[i];
+    const eff = effOf(s);
+    const intake = amount[i] / popSum[i];
+    console.log(
+      `    ${s.name.padEnd(12)} 実効代謝 ${eff.toFixed(3)}  ` +
+        `歩あたりの摂取 ${intake.toFixed(3)}（比 ${(intake / eff).toFixed(2)}）  ` +
+        `採食頻度 ${((events[i] / popSum[i]) * 100).toFixed(0)}%  ` +
+        `1回あたり ${(amount[i] / events[i]).toFixed(3)}`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+header('節8: パッチを入れても共存は残るか');
+
+/**
+ * [07](../07-grass-patches.md) は不均質にすると 657対965 が **16対1606** になると
+ * 出した。だが 07 の本文は「勝敗がひっくり返るだけで共存自体は保たれる（8/8）」で、
+ * 16 は 0 ではない。OVERVIEW が「共存がさらに壊れた」と要約したのは踏み込みすぎ。
+ *
+ * ただし**16体は危ない**。上位捕食者が谷で1〜5体まで落ちて偶然だけで消えるのと
+ * 同じ領域で、[14](../14-mass-death.md) の「崩壊率は走行の長さで変わる」が
+ * そのまま当てはまる。**6000ステップの 8/8 は 30000 では持たないかもしれない。**
+ *
+ * これは「共存は残るが脆い」と「共存は壊れる」を分ける測定で、
+ * どちらでも筋2の書き方が変わる。
+ */
+console.log('  upkeep 警戒型 vs 無警戒型（捕食者なし・パッチあり）  8シード');
+for (const contrast of [0, 0.6, 0.9]) {
+  for (const steps of [6000, 30000]) {
+    const build = () => {
+      const cfg = pair('upkeep', [1, 2])();
+      if (contrast > 0) cfg.grass.patch = { scale: 30, contrast };
+      return cfg;
+    };
+    const t = await trial(build, { seeds: SEEDS, steps, tail: Math.floor(steps / 2) });
+    console.log(
+      `    強さ${contrast} ${String(steps).padStart(5)}歩  ${mark(t)}${t.survived}/${t.total}  ` +
+        t.species.map((s) => `${s.name} ${s.mean.toFixed(0)}(${s.min}-${s.max})`).join('  ') +
+        (t.extinctAt.length > 0 ? `  絶滅 ${t.extinctAt.join(',')}` : ''),
+    );
+  }
+}
+
 await done(t0);
