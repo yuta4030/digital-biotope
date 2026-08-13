@@ -76,6 +76,19 @@ interface Opts {
   herbOnly?: boolean;
   /** 肉食の初期個体数を0にする。捕食圧が消えるので速度は約1.11に落ちる */
   predator?: boolean;
+  /**
+   * 肉食にも速度を遺伝させる。10 は草食だけを進化させたので、これは新しい。
+   *
+   * 地形の直接効果は弱い（速度差0.04）。コストが速度に線形で、振れ幅が
+   * 実効代謝の数%しかないため。だが 10 が出したのは「速い足の価値は捕食圧が
+   * 生んでいる」で、捕食者あり2.74 / なし1.11 と**2.5倍振れる**。
+   * 捕食圧は丘に対して桁違いに強いレバーになる。
+   *
+   * 捕食者が進化できるなら、山では速い捕食者が高くつく。捕食者が遅くなるか
+   * 減るかして**山が捕食圧の低い場所になる**なら、山では目型・平地では足型という
+   * 差が、直接のコスト差ではなく 10 が実証済みの強いレバー経由で出る。
+   */
+  predatorEvolves?: boolean;
 }
 
 function cfgOf(o: Opts): WorldConfig {
@@ -84,6 +97,9 @@ function cfgOf(o: Opts): WorldConfig {
   if (o.vision !== undefined) herb.visionRange = o.vision;
   if (o.start !== undefined) herb.speed = o.start;
   if (o.predator === false) pred.initialCount = 0;
+  // 草食と同じ刻み。速い足の上限も同じにしておく（別にすると
+  // 「どちらが速くなれるか」が設定で決まってしまう）
+  if (o.predatorEvolves) pred.mutation = { speedSigma: 0.05, speedMin: 0, speedMax: 4 };
   if (o.contrast > 0) {
     cfg.terrain = {
       scale: SCALE,
@@ -159,11 +175,14 @@ async function row(label: string, o: Opts): Promise<void> {
   const [herb, pred] = t.species;
   const swing = SPEED_COST * herb.speed * (o.target === 'base' ? 0 : o.contrast);
   console.log(
-    `    ${label.padEnd(18)} ${mark(t)}${t.survived}/${t.total}  ` +
+    `    ${label.padEnd(20)} ${mark(t)}${t.survived}/${t.total}  ` +
       `速度 ${speedOf(t).padEnd(20)} ばらつき ${herb.speedSd.toFixed(2)}  ` +
       `草食 ${herb.mean.toFixed(0).padStart(4)}(${herb.min}-${herb.max})  ` +
       `肉食 ${pred.mean.toFixed(0).padStart(3)}  ` +
-      `振れ幅 ${swing.toFixed(3)}`,
+      // 捕食者が進化する構成では、捕食者の速度こそが見たいもの
+      (o.predatorEvolves
+        ? `肉食速度 ${speedOf(t, 1).padEnd(20)} ばらつき ${pred.speedSd.toFixed(2)}`
+        : `振れ幅 ${swing.toFixed(3)}`),
   );
 }
 
@@ -253,6 +272,39 @@ console.log('  地形クラス別');
 await sortRow({ contrast: 0.6, predator: false });
 await sortRow({ contrast: 0.9, predator: false });
 
+// ---------------------------------------------------------------------------
+header('節7: 捕食者も速度を遺伝させる');
+
+/**
+ * ここまでで測っていたのは地形の**直接効果**で、それは弱い。コストが速度に
+ * 線形で、振れ幅が実効代謝の数%しかないため（節3で速度差0.04）。
+ *
+ * だが 10 が出した一番強いレバーは捕食圧だった——捕食者あり2.74 / なし1.11 で
+ * **2.5倍振れる**。地形が捕食圧の地図になるなら、直接効果より桁違いに強い。
+ *
+ * 10 は草食だけを進化させたので、捕食者が進化する構成そのものが新しい。
+ * だから contrast 0 の行が要る。**捕食者の速度がどこに落ち着くかを誰も知らない。**
+ *
+ * 予想:
+ * 1. 平坦（contrast 0）でも軍拡が起きて、両方が上限近くまで走るか、
+ *    釣り合う内点に落ち着くかのどちらか。10 の速度コストは代償として効いているので
+ *    内点のほうだと思うが、追う側と逃げる側で最適が違うので分からない
+ * 2. 起伏があると、山では速い捕食者が高くつく。捕食者が山で減るか遅くなるなら、
+ *    **山は捕食圧の低い場所になる**。そうなれば山の草食は遅くてよくなる
+ * 3. 効くとしたら草食の速度差は節3の0.04より大きくなる。
+ *    同じくらいなら、捕食圧という強いレバーを経由しても届かないことになる
+ *
+ * 注意: これは**軸を2本同時に足している**（地形と捕食者の変異）。
+ * contrast 0 の行がその片方だけの対照になる。
+ */
+console.log('  8シード / 10000ステップ');
+for (const contrast of [0, 0.6, 0.9]) {
+  await row(`両方進化 ${contrast}`, { contrast, predatorEvolves: true });
+}
+console.log('  地形クラス別（上段が草食、下段が肉食）');
+await sortRow({ contrast: 0.6, predatorEvolves: true });
+await sortRow({ contrast: 0.9, predatorEvolves: true });
+
 await done(t0);
 
 // ---------------------------------------------------------------------------
@@ -285,9 +337,20 @@ async function sortRow(o: Opts, s: SortOpts = {}): Promise<void> {
     (o.predator === false ? ' 肉食なし' : '') +
     (s.fixSpeed !== undefined ? ' 速度固定' : '');
 
-  const pop = [0, 0, 0];
-  const spd = [0, 0, 0];
-  const spdN = [0, 0, 0];
+  // [種インデックス][地形クラス]。捕食者も進化する構成では両方見ないと、
+  // 「山が捕食圧の低い場所になったか」が分からない
+  const pop = [
+    [0, 0, 0],
+    [0, 0, 0],
+  ];
+  const spd = [
+    [0, 0, 0],
+    [0, 0, 0],
+  ];
+  const spdN = [
+    [0, 0, 0],
+    [0, 0, 0],
+  ];
   let paid = 0;
   let flat = 0;
   let samples = 0;
@@ -319,11 +382,12 @@ async function sortRow(o: Opts, s: SortOpts = {}): Promise<void> {
       paid += w.terrainCostPaid;
       flat += w.terrainCostFlat;
       for (let a = 0; a < w.count; a++) {
-        if (w.aSpecies[a] !== 0) continue;
+        const si = w.aSpecies[a];
+        if (si > 1) continue;
         const k = klass[w.aY[a] * w.width + w.aX[a]];
-        pop[k]++;
-        spd[k] += w.aSpeed[a];
-        spdN[k]++;
+        pop[si][k]++;
+        spd[si][k] += w.aSpeed[a];
+        spdN[si][k]++;
       }
     }
     let alive = 0;
@@ -331,13 +395,21 @@ async function sortRow(o: Opts, s: SortOpts = {}): Promise<void> {
     if (alive > 0) survived++;
   }
 
-  const per = (k: number) => pop[k] / samples;
-  const avg = (k: number) => (spdN[k] > 0 ? spd[k] / spdN[k] : NaN);
+  const per = (s: number, k: number) => pop[s][k] / samples;
+  const avg = (s: number, k: number) => (spdN[s][k] > 0 ? spd[s][k] / spdN[s][k] : NaN);
+  const row3 = (name: string, s: number, f: (s: number, k: number) => number, d: number) =>
+    `${name} 平${f(s, 0).toFixed(d)} 中${f(s, 1).toFixed(d)} 険${f(s, 2).toFixed(d)}`;
+
   console.log(
-    `    ${label.padEnd(20)} ${survived}/${SEEDS_4.length}  ` +
-      `個体数 平${per(0).toFixed(0).padStart(4)} 中${per(1).toFixed(0).padStart(4)} ` +
-      `険${per(2).toFixed(0).padStart(4)}  ` +
-      `速度 平${avg(0).toFixed(2)} 中${avg(1).toFixed(2)} 険${avg(2).toFixed(2)}  ` +
+    `    ${label.padEnd(24)} ${survived}/${SEEDS_4.length}  ` +
+      `${row3('草食', 0, per, 0)}  ${row3('速度', 0, avg, 2)}  ` +
       `実現倍率 ${(paid / flat).toFixed(4)}`,
   );
+  // 捕食者が進化する構成でだけ、捕食者の側も出す。
+  // 山が捕食圧の低い場所になったなら、ここに個体数か速度の差が出る
+  if (o.predatorEvolves) {
+    console.log(
+      `      ${''.padEnd(22)}      ${row3('肉食', 1, per, 1)}  ${row3('速度', 1, avg, 2)}`,
+    );
+  }
 }
