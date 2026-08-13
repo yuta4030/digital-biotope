@@ -87,6 +87,15 @@ export class World {
    * ずれていないかを確かめるための量で、混ぜると確かめられなくなる。
    */
   readonly deathsDisturbance: Int32Array;
+  /**
+   * 密度依存の死で取り除いた数。種インデックス別で、毎ステップ上書きする。
+   *
+   * 大量死（deathsDisturbance）と混ぜない。この2つは同じ「形質を見ない死」でも、
+   * 一方は密度に比例し他方はしないので、混ぜると **同じ量を取り除いたのか**を
+   * 確かめられなくなる。self と all の比較はまさにそれを揃える比較なので、
+   * ここが分かれていないと実験そのものが成り立たない。
+   */
+  readonly deathsCrowding: Int32Array;
 
   /**
    * 大量死の対象かどうか。種インデックス別に 1/0。
@@ -100,6 +109,47 @@ export class World {
    * パッチ場（buildPatchField）・侵入（run.ts）と同じ理由で同じ手を使っている。
    */
   readonly disturbanceRng: Rng;
+  /**
+   * 密度依存の死用の乱数。大量死ともまた別のストリーム。
+   * 同じ流れから引くと、片方を有効にした瞬間にもう片方の抽選がずれる。
+   * self と all を比べるときは両者が同じ乱数列をたどっていてほしいので、
+   * ここを共有させてはいけない。
+   */
+  readonly crowdingRng: Rng;
+  /** crowding を持つ種が1つでもあるか。無ければ毎ステップの走査ごと飛ばす */
+  readonly anyCrowding: boolean;
+
+  /**
+   * 感染で死んだ数・新たに感染した数。種インデックス別で毎ステップ上書きする。
+   *
+   * 感染経路を**接触と自然発生に分けて**数える。自然発生は密度に依存しない死なので、
+   * そちらが主なら 15 で潰した「均等な死」をやっているだけになる。
+   * 分けて数えていないと、頻度依存が効いたのかどうかを確かめられない。
+   */
+  readonly deathsInfection: Int32Array;
+  readonly infectedByContact: Int32Array;
+  readonly infectedBySpontaneous: Int32Array;
+  /** 感染症用の乱数。世界本体・大量死・密度依存のどれとも別ストリーム */
+  readonly infectionRng: Rng;
+  /** infection を持つ種が1つでもあるか */
+  readonly anyInfection: boolean;
+  /**
+   * 個体ごとの感染状態（0/1）。遺伝はしない——子は必ず未感染で生まれる。
+   * 垂直感染を入れると軸が1本増えるので、いまは水平感染だけを見る。
+   */
+  readonly aInfected: Uint8Array;
+  /**
+   * 次ステップの感染状態。**このステップで新たに感染した個体を、
+   * 同じステップの伝染源にしないため**に分けてある。
+   *
+   * 直接 aInfected に書き込むと、配列の添字が若い個体から順に連鎖して
+   * 1ステップで世界の端まで伝染しうる。しかも伝わり方が走査順に依存するので、
+   * 03 で3回踏んだ「走査順のバイアスが生態学的な現象に見える」がそのまま出る。
+   */
+  readonly aInfectedNext: Uint8Array;
+  /** 密度依存の死で使う作業配列。step.ts から使うので private にしない */
+  readonly crowdCounts: Int32Array;
+  readonly crowdProb: Float64Array;
 
   // --- エージェント ---
   readonly capacity: number;
@@ -189,6 +239,16 @@ export class World {
       }
     }
     this.disturbanceRng = new Rng((config.seed ^ 0x7c9e3b21) >>> 0);
+    this.deathsCrowding = new Int32Array(n);
+    this.anyCrowding = this.defs.some((d) => d.crowding !== undefined && d.crowding.rate > 0);
+    this.crowdingRng = new Rng((config.seed ^ 0x51ab7d0f) >>> 0);
+    this.crowdCounts = new Int32Array(n);
+    this.crowdProb = new Float64Array(n);
+    this.deathsInfection = new Int32Array(n);
+    this.infectedByContact = new Int32Array(n);
+    this.infectedBySpontaneous = new Int32Array(n);
+    this.anyInfection = this.defs.some((d) => d.infection !== undefined);
+    this.infectionRng = new Rng((config.seed ^ 0x2f6a91c5) >>> 0);
     this.speedSum = new Float64Array(n);
     this.speedSqSum = new Float64Array(n);
     this.speedCount = new Float64Array(n);
@@ -207,6 +267,8 @@ export class World {
     this.aAge = new Uint16Array(this.capacity);
     this.aSpeed = new Float32Array(this.capacity);
     this.aAlive = new Uint8Array(this.capacity);
+    this.aInfected = new Uint8Array(this.capacity);
+    this.aInfectedNext = new Uint8Array(this.capacity);
 
     this.cellStart = new Int32Array(this.cells + 1);
     this.cellAgents = new Int32Array(this.capacity);
@@ -215,6 +277,31 @@ export class World {
     this.order = new Int32Array(this.capacity);
 
     this.spawnInitial();
+    this.seedInfection();
+  }
+
+  /**
+   * 初期個体の一部を感染状態にする。
+   *
+   * spawnInitial の**後**に、専用の乱数ストリームから引く。初期配置の途中で
+   * 引くと、感染を有効にした瞬間に個体の初期座標がずれる。
+   * 感染を書かない構成では1つも引かないので、既存の結果は変わらない。
+   */
+  private seedInfection(): void {
+    if (!this.anyInfection) return;
+    for (let i = 0; i < this.count; i++) {
+      const inf = this.defs[this.aSpecies[i]].infection;
+      if (inf === undefined || inf.initial <= 0) continue;
+      if (this.infectionRng.chance(inf.initial)) this.aInfected[i] = 1;
+    }
+  }
+
+  /** 種インデックス別の感染個体数を out に書き込む */
+  countInfected(out: Int32Array): void {
+    out.fill(0);
+    for (let i = 0; i < this.count; i++) {
+      if (this.aInfected[i] === 1) out[this.aSpecies[i]]++;
+    }
   }
 
   /**
@@ -320,6 +407,9 @@ export class World {
     this.aAge[i] = 0;
     this.aSpeed[i] = speed ?? this.defs[speciesIdx].speed;
     this.aAlive[i] = 1;
+    // 子は必ず未感染で生まれる（垂直感染は入れていない）。
+    // 使い回した添字に前の個体の状態が残らないよう、必ず書き戻す
+    this.aInfected[i] = 0;
     return true;
   }
 
@@ -353,7 +443,7 @@ export class World {
 
   /** 死亡個体を取り除いて [0, count) を詰める */
   compact(): void {
-    const { aSpecies, aX, aY, aEnergy, aAge, aSpeed, aAlive } = this;
+    const { aSpecies, aX, aY, aEnergy, aAge, aSpeed, aAlive, aInfected } = this;
     let n = this.count;
     let i = 0;
     while (i < n) {
@@ -371,6 +461,7 @@ export class World {
         aAge[i] = aAge[n];
         aSpeed[i] = aSpeed[n];
         aAlive[i] = aAlive[n];
+        aInfected[i] = aInfected[n];
       }
     }
     this.count = n;

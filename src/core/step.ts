@@ -19,10 +19,156 @@ export function step(w: World): void {
   w.buildSpatialIndex();
   feed(w);
   metabolize(w);
+  infection(w);
+  crowdingDeath(w);
   massDeath(w);
   w.compact();
   reproduce(w);
   w.stepCount++;
+}
+
+/**
+ * 接触で伝わる感染症。負の頻度依存を**機構として**書いたもの。
+ *
+ * 頻度依存を手で書かないのが要点。見るのは「同じセルに感染個体が何体いるか」だけで、
+ * 種の個体数はどこにも出てこない。それでも増えた種ほど同型との遭遇が増えるので、
+ * 1個体あたりの感染リスクが自分の密度に応じて上がる。
+ *
+ * 空間インデックスが要るので、buildSpatialIndex より後・compact より前に呼ぶ。
+ * feed で食われた個体は aAlive が0になっているが index には残っているので、
+ * 伝染源にも感染先にもしない。
+ *
+ * 処理は3段に分かれている。順序を混ぜると測っているものが変わる：
+ *   1. 伝染と自然発生を **aInfectedNext に書く**（このステップの伝染源は増やさない）
+ *   2. **その時点で感染していた個体**だけが死亡・回復の抽選を受ける
+ *   3. 状態を入れ替える
+ *
+ * 2 を 1 より後に置いても、読むのは常に古い状態（aInfected）なので、
+ * 個体の走査順は結果に影響しない。ここは 03 で3回踏んだ場所なので、
+ * 「順番を変えても同じ」が成り立つ形にしてある。
+ */
+function infection(w: World): void {
+  const deaths = w.deathsInfection;
+  const byContact = w.infectedByContact;
+  const bySpont = w.infectedBySpontaneous;
+  deaths.fill(0);
+  byContact.fill(0);
+  bySpont.fill(0);
+  if (!w.anyInfection) return;
+
+  const rng = w.infectionRng;
+  const count = w.count;
+  const next = w.aInfectedNext;
+  const cur = w.aInfected;
+
+  // --- 1. 伝染と自然発生 ---
+  for (let i = 0; i < count; i++) {
+    next[i] = cur[i];
+    if (w.aAlive[i] === 0) continue;
+
+    const si = w.aSpecies[i];
+    const inf = w.defs[si].infection;
+    if (inf === undefined) continue;
+    if (cur[i] === 1) continue; // 既に感染している
+
+    // 同じセルの感染個体を数える。scope が self なら同種だけ
+    let k = 0;
+    const c = w.aY[i] * w.width + w.aX[i];
+    const end = w.cellStart[c + 1];
+    for (let p = w.cellStart[c]; p < end; p++) {
+      const j = w.cellAgents[p];
+      if (j === i || w.aAlive[j] === 0 || cur[j] === 0) continue;
+      if (inf.scope === 'self' && w.aSpecies[j] !== si) continue;
+      k++;
+    }
+
+    if (k > 0 && inf.transmit > 0) {
+      // k体それぞれが独立に伝染させる。1回ずつ引くと k に比例して乱数の
+      // 消費数が変わるので、まとめて 1 - (1-p)^k で1回だけ引く
+      if (rng.chance(1 - Math.pow(1 - inf.transmit, k))) {
+        next[i] = 1;
+        byContact[si]++;
+        continue;
+      }
+    }
+    if (inf.spontaneous > 0 && rng.chance(inf.spontaneous)) {
+      next[i] = 1;
+      bySpont[si]++;
+    }
+  }
+
+  // --- 2. 死亡と回復（このステップの頭で感染していた個体だけ） ---
+  for (let i = 0; i < count; i++) {
+    if (w.aAlive[i] === 0 || cur[i] === 0) continue;
+    const si = w.aSpecies[i];
+    const inf = w.defs[si].infection;
+    if (inf === undefined) continue;
+
+    if (inf.lethality > 0 && rng.chance(inf.lethality)) {
+      w.aAlive[i] = 0;
+      next[i] = 0;
+      deaths[si]++;
+      const def = w.defs[si];
+      if (def.corpseGrass > 0) dropCorpse(w, def.corpseGrass, def.corpseSpread, w.aX[i], w.aY[i]);
+      continue;
+    }
+    if (inf.recover > 0 && rng.chance(inf.recover)) next[i] = 0;
+  }
+
+  // --- 3. 状態の入れ替え ---
+  cur.set(next.subarray(0, count));
+}
+
+/**
+ * 密度に比例した追加の死亡。負の頻度依存を手で書いたもの。
+ *
+ * 個体数は**このステップの死亡処理を始める前の値**で固定する（compact 前なので
+ * countBySpecies がその値を返す）。殺しながら数え直すと、走査順の早い個体ほど
+ * 高い密度で抽選されることになり、03 で踏んだ「走査順のバイアスが生態学的な
+ * 現象に見える」形の罠がそのまま再現する。
+ *
+ * 大量死より**前**に置いてある。順序を決めておかないと、両方を有効にしたときに
+ * 「大量死で減った後の個体数で密度を計算する」ことになり、2つの軸が掛け算で
+ * 絡む。前に置けば密度は大量死の影響を受けない。
+ *
+ * 乱数は世界本体とも大量死とも別のストリームから引き、crowding を持つ種が
+ * 無ければ1つも引かない。既存の構成の乱数列は変わらない。
+ */
+function crowdingDeath(w: World): void {
+  const killed = w.deathsCrowding;
+  killed.fill(0);
+  if (!w.anyCrowding) return;
+
+  const counts = w.crowdCounts;
+  w.countBySpecies(counts);
+
+  let total = 0;
+  for (let i = 0; i < counts.length; i++) total += counts[i];
+
+  // 種ごとの死亡確率を先に出しておく。個体ごとに割り算をやり直す必要はない
+  const prob = w.crowdProb;
+  prob.fill(0);
+  for (let si = 0; si < counts.length; si++) {
+    const c = w.defs[si].crowding;
+    if (c === undefined || c.rate <= 0) continue;
+    const n = c.scope === 'self' ? counts[si] : total;
+    prob[si] = c.rate * (n / w.cells);
+  }
+
+  const rng = w.crowdingRng;
+  for (let i = 0; i < w.count; i++) {
+    // 既にこのステップで死んでいる個体は数にも乱数にも数えない（大量死と同じ扱い）
+    if (w.aAlive[i] === 0) continue;
+    const si = w.aSpecies[i];
+    const p = prob[si];
+    if (p <= 0) continue;
+    if (!rng.chance(p)) continue;
+
+    w.aAlive[i] = 0;
+    killed[si]++;
+    const def = w.defs[si];
+    if (def.corpseGrass > 0) dropCorpse(w, def.corpseGrass, def.corpseSpread, w.aX[i], w.aY[i]);
+  }
 }
 
 /**

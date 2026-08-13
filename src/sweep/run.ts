@@ -198,6 +198,8 @@ export interface InvasionResult {
     max: number;
     /** 1ステップあたり大量死で取り除かれた数。つまみが設計どおり効いているかの確認用 */
     killed: number;
+    /** 1ステップあたり密度依存の死で取り除かれた個体数（集計区間の平均） */
+    crowded: number;
   }[];
   /**
    * warmup 以降の草の総量の平均。attempt.grass を比に直す基準に使う。
@@ -276,6 +278,7 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
   const min = new Float64Array(n).fill(Infinity);
   const max = new Float64Array(n).fill(0);
   const killedSum = new Float64Array(n);
+  const crowdedSum = new Float64Array(n);
   let samples = 0;
   let grassSum = 0;
   let grassSamples = 0;
@@ -302,6 +305,7 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
       if (c < min[i]) min[i] = c;
       if (c > max[i]) max[i] = c;
       killedSum[i] += w.deathsDisturbance[i];
+      crowdedSum[i] += w.deathsCrowding[i];
     }
     samples++;
     // 草はセル数ぶん舐めるので間引く。runOne と同じ刻み
@@ -394,6 +398,7 @@ export function runInvasion(config: WorldConfig, opts: InvasionOptions): Invasio
         min: min[i] === Infinity ? 0 : min[i],
         max: max[i],
         killed: samples > 0 ? killedSum[i] / samples : 0,
+        crowded: samples > 0 ? crowdedSum[i] / samples : 0,
       };
     }),
   };
@@ -432,6 +437,31 @@ export interface SpeciesResult {
    * `killed / mean` が条件間で揃っていなければ、揺らぎ以外のものも動いている。
    */
   killed: number;
+  /**
+   * 1ステップあたり密度依存の死で取り除かれた個体数（集計区間の平均）。
+   *
+   * self と all を比べるときは、**両者の合計がほぼ揃っていること**を必ず確かめる。
+   * 揃っていなければ「誰の密度を見るか」ではなく「どれだけ取り除いたか」の差を
+   * 見ていることになり、15 で潰したはずの交絡がそのまま戻る。
+   */
+  crowded: number;
+  /**
+   * 感染症の測定値（集計区間の平均）。
+   *
+   * `contact` と `spontaneous` を分けているのが肝。自然発生は密度に依存しない死なので、
+   * そちらが主なら 15 で潰した「均等な死」をやっているだけになる。
+   * 内訳を見ないと、頻度依存が効いたのかどうかを確かめられない。
+   */
+  infection: {
+    /** 感染している個体数 */
+    infected: number;
+    /** 1ステップあたり感染で死んだ数 */
+    deaths: number;
+    /** 1ステップあたり接触で新たに感染した数 */
+    contact: number;
+    /** 1ステップあたり自然発生で新たに感染した数 */
+    spontaneous: number;
+  };
 }
 
 export interface RunResult {
@@ -478,6 +508,12 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
   const speedSdSum = new Float64Array(n);
   const speedSamples = new Float64Array(n);
   const killedSum = new Float64Array(n);
+  const crowdedSum = new Float64Array(n);
+  const infectedSum = new Float64Array(n);
+  const infDeathSum = new Float64Array(n);
+  const infContactSum = new Float64Array(n);
+  const infSpontSum = new Float64Array(n);
+  const infCounts = new Int32Array(n);
 
   let samples = 0;
   let grassSum = 0;
@@ -509,6 +545,14 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
         if (c < min[i]) min[i] = c;
         if (c > max[i]) max[i] = c;
         killedSum[i] += w.deathsDisturbance[i];
+        crowdedSum[i] += w.deathsCrowding[i];
+        infDeathSum[i] += w.deathsInfection[i];
+        infContactSum[i] += w.infectedByContact[i];
+        infSpontSum[i] += w.infectedBySpontaneous[i];
+      }
+      if (w.anyInfection) {
+        w.countInfected(infCounts);
+        for (let i = 0; i < n; i++) infectedSum[i] += infCounts[i];
       }
       samples++;
       // 生産量は step が計算済みなので毎ステップ足しても安い
@@ -556,6 +600,13 @@ export function runOne(config: WorldConfig, steps: number, tail: number): RunRes
       speedSd: speedSamples[i] > 0 ? speedSdSum[i] / speedSamples[i] : 0,
       speedSamples: speedSamples[i],
       killed: samples > 0 ? killedSum[i] / samples : 0,
+      crowded: samples > 0 ? crowdedSum[i] / samples : 0,
+      infection: {
+        infected: samples > 0 ? infectedSum[i] / samples : 0,
+        deaths: samples > 0 ? infDeathSum[i] / samples : 0,
+        contact: samples > 0 ? infContactSum[i] / samples : 0,
+        spontaneous: samples > 0 ? infSpontSum[i] / samples : 0,
+      },
       };
     }),
   };
