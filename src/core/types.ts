@@ -291,6 +291,19 @@ export interface TerrainConfig {
    * 同じ contrast だと振れ幅が `speedCost × speed` 対 `metabolism` で違う。
    */
   target: 'speed' | 'base';
+  /**
+   * 地形を適用する種の id。省略すると全種。
+   *
+   * **省略してはいけない場合がある。** 全種に掛けると捕食者の移動コストも
+   * 不均質になり、実現倍率が1を割るぶん捕食者が安くなる。捕食者が増えれば
+   * 捕食圧が上がり、[10](../../docs/reports/10-speed-evolution.md) が示したとおり
+   * 速度の丘そのものが動く。20 の第1回はこれを踏んで、
+   * 「地形が丘を動かした」と「捕食圧が丘を動かした」を分けられなかった。
+   *
+   * [14](../../docs/reports/14-mass-death.md) の大量死がまったく同じ形で躓き、
+   * 対象を草食だけに絞って解決している。同じ理由で同じ形の逃げ道を用意してある。
+   */
+  species?: number[];
 }
 
 export interface GrassConfig {

@@ -72,15 +72,25 @@ interface Opts {
   /** 視野3にすると 10 の分岐（目型・足型）の構成になる */
   vision?: number;
   start?: number;
+  /** 地形を草食（id=1）だけに掛ける。捕食者経由の交絡を外すため */
+  herbOnly?: boolean;
+  /** 肉食の初期個体数を0にする。捕食圧が消えるので速度は約1.11に落ちる */
+  predator?: boolean;
 }
 
 function cfgOf(o: Opts): WorldConfig {
   const cfg = presetByKey('evolution').build();
-  const [herb] = cfg.species;
+  const [herb, pred] = cfg.species;
   if (o.vision !== undefined) herb.visionRange = o.vision;
   if (o.start !== undefined) herb.speed = o.start;
+  if (o.predator === false) pred.initialCount = 0;
   if (o.contrast > 0) {
-    cfg.terrain = { scale: SCALE, contrast: o.contrast, target: o.target ?? 'speed' };
+    cfg.terrain = {
+      scale: SCALE,
+      contrast: o.contrast,
+      target: o.target ?? 'speed',
+      ...(o.herbOnly ? { species: [1] } : {}),
+    };
   }
   return cfg;
 }
@@ -193,6 +203,56 @@ header('節4: 速度を固定したら分離は消えるか');
 console.log('  速度を 2.74 に固定（変異なし）');
 await sortRow({ contrast: 0.6 }, { fixSpeed: REF_SPEED });
 
+// ---------------------------------------------------------------------------
+header('節5: 捕食者を地形から外す');
+
+/**
+ * 第1回の節2は**交絡していた**。地形を全種に掛けると捕食者の移動コスト
+ * （`speedCost 0.15 × speed 2 = 0.3`、実効代謝0.575の52%）も不均質になり、
+ * 実現倍率が1を割るぶん捕食者が安くなる。肉食が 341 → 379 に増えていて、
+ * 10 が示したとおり**捕食圧が速度の丘を動かす**。
+ *
+ * つまり「地形が丘を動かした」ではなく「地形が捕食者を増やして丘が動いた」
+ * かもしれない。[14](../14-mass-death.md) が大量死でまったく同じ形に躓き、
+ * 対象を草食だけに絞って解決している。同じ手を当てる。
+ *
+ * これで丘が動かなくなるなら、第1回の速度上昇は全部捕食圧の話だった。
+ */
+console.log('  地形を草食だけに掛ける  8シード / 10000ステップ');
+for (const contrast of [0, 0.6, 0.9]) {
+  await row(`草食のみ ${contrast}`, { contrast, herbOnly: true });
+}
+await row(`草食のみ対照 ${matched(0.6).toFixed(2)}`, {
+  contrast: matched(0.6),
+  target: 'base',
+  herbOnly: true,
+});
+console.log('  地形クラス別');
+await sortRow({ contrast: 0.6, herbOnly: true });
+await sortRow({ contrast: 0.9, herbOnly: true });
+
+// ---------------------------------------------------------------------------
+header('節6: 遅い集団なら分離するか');
+
+/**
+ * 予想2の検定。分離が起きるには、系統が同じ地形クラスに居続ける時間が
+ * 選択の効く時間を上回る必要がある。速度2.9の個体はランダムウォークで
+ * 30セルの起伏を100歩少々で抜けるが、1.1なら700歩かかる。
+ *
+ * 捕食者を外すと速度は約1.11に落ちる（10）。**混ざりが遅くなるので、
+ * 分離が出るとしたらここ。** 出なければ「混ざるから消えた」ではなく
+ * 「そもそもこの軸は形質を分けない」ことになる。
+ *
+ * 捕食者がいないぶん、地形は全種に掛けても交絡しない（草食しかいない）。
+ */
+console.log('  肉食なし（速度は約1.11に落ちる）  8シード / 10000ステップ');
+for (const contrast of [0, 0.6, 0.9]) {
+  await row(`肉食なし ${contrast}`, { contrast, predator: false });
+}
+console.log('  地形クラス別');
+await sortRow({ contrast: 0.6, predator: false });
+await sortRow({ contrast: 0.9, predator: false });
+
 await done(t0);
 
 // ---------------------------------------------------------------------------
@@ -221,6 +281,8 @@ interface SortOpts {
 async function sortRow(o: Opts, s: SortOpts = {}): Promise<void> {
   const label =
     (o.target === 'base' ? `対照 強さ${o.contrast.toFixed(2)}` : `強さ${o.contrast}`) +
+    (o.herbOnly ? ' 草食のみ' : '') +
+    (o.predator === false ? ' 肉食なし' : '') +
     (s.fixSpeed !== undefined ? ' 速度固定' : '');
 
   const pop = [0, 0, 0];

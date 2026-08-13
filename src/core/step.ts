@@ -582,7 +582,7 @@ function metabolize(w: World): void {
     const def = w.defs[si];
 
     let charge = mutating ? w.effectiveMetabolismFor(si, w.aSpeed[i]) : cost[si];
-    if (terrain) {
+    if (terrain && w.terrainTargetSpecies[si] === 1) {
       // 平坦な場合との差分だけを足す。倍率1のセルでは差が0になるので、
       // contrast=0 の走行が地形を入れる前と完全に一致する
       const term = w.terrainModulatedTerm(si, mutating ? w.aSpeed[i] : def.speed);

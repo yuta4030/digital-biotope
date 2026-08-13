@@ -91,6 +91,14 @@ export class World {
   terrainCostPaid = 0;
   terrainCostFlat = 0;
   /**
+   * 地形を適用する種か。種インデックス別に 1/0。省略時は全種。
+   *
+   * 全種に掛けると捕食者の移動コストまで不均質になり、実現倍率が1を割るぶん
+   * 捕食者が安くなる。捕食者が増えれば捕食圧が上がり、10 が示したとおり
+   * 速度の丘そのものが動く。20 の第1回はこれを踏んだ。
+   */
+  readonly terrainTargetSpecies: Uint8Array;
+  /**
    * 直前のステップで実際に草に加わった量。
    * 上限で頭打ちになったぶんは入らないので、名目の生産量（regrow × セル数）とは一致しない。
    * パッチは豊かなセルを飽和させやすく、実質的な生産量を下げる方向に効く。
@@ -275,6 +283,19 @@ export class World {
         this.disturbTarget[i] = 1;
       }
     }
+    // 地形の対象。大量死と同じ形にしてあるのは同じ交絡を踏んだため
+    // （全種に掛けると捕食者が安くなり、捕食圧が速度の丘を動かす）
+    this.terrainTargetSpecies = new Uint8Array(n).fill(1);
+    const terrainTargets = config.terrain?.species;
+    if (terrainTargets !== undefined) {
+      this.terrainTargetSpecies.fill(0);
+      for (const id of terrainTargets) {
+        const i = idToIndex.get(id);
+        if (i === undefined) throw new Error(`地形の対象 id=${id} が種定義に存在しません`);
+        this.terrainTargetSpecies[i] = 1;
+      }
+    }
+
     this.disturbanceRng = new Rng((config.seed ^ 0x7c9e3b21) >>> 0);
     this.deathsCrowding = new Int32Array(n);
     this.anyCrowding = this.defs.some((d) => d.crowding !== undefined && d.crowding.rate > 0);
