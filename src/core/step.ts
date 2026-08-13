@@ -561,6 +561,8 @@ function feed(w: World): void {
  * 「還元を入れた効果」がいちばん効くはずの場面で消えてしまう。
  */
 function metabolize(w: World): void {
+  w.syncTerrain();
+
   // 行動コストを含めた実効値を種ごとに1回だけ求める。
   // スライダーで即時に変わるので毎ステップ引き直すが、種数ぶんなので安い
   const cost = w.effMetabolism;
@@ -568,13 +570,31 @@ function metabolize(w: World): void {
 
   // 速度が個体ごとに違う構成でだけ、1体ずつ引き直す
   const mutating = w.anyMutation;
+  // 地形は個体のいるセルを見るので、種ごとの1回では済まない
+  const terrain = w.terrainVaried;
+  const tw = w.terrainWeight;
+  w.terrainCostPaid = 0;
+  w.terrainCostFlat = 0;
 
   for (let i = 0; i < w.count; i++) {
     if (w.aAlive[i] === 0) continue;
     const si = w.aSpecies[i];
     const def = w.defs[si];
 
-    w.aEnergy[i] -= mutating ? w.effectiveMetabolismFor(si, w.aSpeed[i]) : cost[si];
+    let charge = mutating ? w.effectiveMetabolismFor(si, w.aSpeed[i]) : cost[si];
+    if (terrain) {
+      // 平坦な場合との差分だけを足す。倍率1のセルでは差が0になるので、
+      // contrast=0 の走行が地形を入れる前と完全に一致する
+      const term = w.terrainModulatedTerm(si, mutating ? w.aSpeed[i] : def.speed);
+      const weight = tw[w.aY[i] * w.width + w.aX[i]];
+      charge += term * (weight - 1);
+      // 設計上の平均倍率は1でも、個体が偏れば実現値はずれる。
+      // 比を見ないと「起伏の効果」と「コストが上下した効果」が分けられない
+      w.terrainCostFlat += term;
+      w.terrainCostPaid += term * weight;
+    }
+
+    w.aEnergy[i] -= charge;
     if (w.aEnergy[i] <= 0) {
       w.aAlive[i] = 0;
       w.deathsOther[si]++;

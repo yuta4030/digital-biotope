@@ -30,6 +30,18 @@ export function buildControls(container: HTMLElement, config: WorldConfig): void
     undefined,
     (v) => String(PATCH_SCALES[v]));
 
+  // 地形は「移動の代償」の分布を変える。パッチ（資源の分布）とは別の軸なので
+  // 同じ大きさの選択肢を共有しつつ、場そのものは別の乱数列から作られる。
+  // 強さ0（既定）なら全セルの倍率が1で、掛け算そのものを省く
+  const terrain = (config.terrain ??= { scale: 30, contrast: 0, target: 'speed' });
+  slider(env, '地形の強さ', 0, 1, 0.05, 2,
+    () => terrain.contrast, (v) => (terrain.contrast = v));
+  slider(env, '地形の大きさ', 0, PATCH_SCALES.length - 1, 1, 0,
+    () => Math.max(0, PATCH_SCALES.indexOf(terrain.scale)),
+    (v) => (terrain.scale = PATCH_SCALES[v]),
+    undefined,
+    (v) => String(PATCH_SCALES[v]));
+
   // 無作為な大量死。割合0（既定）なら何も起きず、乱数も消費しない。
   // 間隔と割合は別々に動かせるが、比べるときは割合÷間隔を揃えること
   // （揃えないと平均個体数まで動く。types.ts の DisturbanceConfig 参照）
