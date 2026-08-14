@@ -192,6 +192,32 @@ export class World {
   readonly grazeAmount: Float64Array;
   readonly grazeCount: Int32Array;
   /**
+   * その歩で個体がどう動いたか。移動のときに書き、採食のときに読む。
+   *
+   *   0 = 盲目（走査半径が0）。行き先は乱数
+   *   1 = 見たが行き先が無かった。行き先は乱数
+   *   2 = 見えた方へ向かった
+   *   3 = 動いていない（速度0、または生まれたばかり）
+   *
+   * 視野1.00 と 0.99 の間に個体数の段差がある（27 節2）。0.99 は1%の歩だけ
+   * 盲目になる値なので、**その1%の歩が何を取っているか**が分からないと
+   * 段差の機構が読めない。種別の grazeAmount / grazeCount では、
+   * 同じ個体の盲目の歩と有視界の歩が合算されてしまう。
+   *
+   * 半径だけでは足りない。半径1でも「周りに今より濃いセルが無い」歩は
+   * 行き先が乱数になるので、盲目の歩と**動き方としては同じ**になる。
+   * 段差が盲目そのもののせいなのか、乱数で動く歩が増えたせいなのかは、
+   * 1 と 2 を分けないと区別できない。
+   */
+  readonly aMoveKind: Uint8Array;
+  /**
+   * 上の種類別に、その歩の歩数・採食量・採食回数。`種インデックス × 4 + 種類` で引く。
+   * 毎ステップ上書きする（moveKindSteps は移動で、graze の2本は採食で）。
+   */
+  readonly moveKindSteps: Int32Array;
+  readonly grazeKindAmount: Float64Array;
+  readonly grazeKindCount: Int32Array;
+  /**
    * 大量死で取り除いた数。種インデックス別で、毎ステップ上書きする。
    *
    * 餓死・寿命死（deathsOther）と混ぜない。大量死は設計上の割合と実現値が
@@ -368,6 +394,9 @@ export class World {
     this.visionSumOther = new Float64Array(n);
     this.grazeAmount = new Float64Array(n);
     this.grazeCount = new Int32Array(n);
+    this.moveKindSteps = new Int32Array(n * 4);
+    this.grazeKindAmount = new Float64Array(n * 4);
+    this.grazeKindCount = new Int32Array(n * 4);
     this.deathsDisturbance = new Int32Array(n);
 
     // 対象の種は構築時に固定する。id からインデックスへの変換をここで済ませておけば
@@ -444,6 +473,9 @@ export class World {
     this.aSpeed = new Float32Array(this.capacity);
     this.aVision = new Float32Array(this.capacity);
     this.aGrazed = new Float32Array(this.capacity);
+    // 3 = 動いていない。最初のステップの移動で必ず書き換わるが、
+    // 書かないまま採食に読まれると「盲目の歩」に化ける
+    this.aMoveKind = new Uint8Array(this.capacity).fill(3);
     this.aAlive = new Uint8Array(this.capacity);
     this.aInfected = new Uint8Array(this.capacity);
     this.aInfectedNext = new Uint8Array(this.capacity);
@@ -639,6 +671,8 @@ export class World {
     // 繁殖は feed より後なので、生まれた子はこのステップに食べていない。
     // 使い回した添字に前の個体の値が残ると、視野別の採食統計が汚れる
     this.aGrazed[i] = 0;
+    // 同じ理由で歩の種類も書き戻す。生まれた個体はまだ動いていない
+    this.aMoveKind[i] = 3;
     this.aAlive[i] = 1;
     // 子は必ず未感染で生まれる（垂直感染は入れていない）。
     // 使い回した添字に前の個体の状態が残らないよう、必ず書き戻す
@@ -676,7 +710,8 @@ export class World {
 
   /** 死亡個体を取り除いて [0, count) を詰める */
   compact(): void {
-    const { aSpecies, aX, aY, aEnergy, aAge, aSpeed, aVision, aGrazed, aAlive, aInfected } = this;
+    const { aSpecies, aX, aY, aEnergy, aAge, aSpeed, aVision, aGrazed, aMoveKind, aAlive, aInfected } =
+      this;
     let n = this.count;
     let i = 0;
     while (i < n) {
@@ -697,6 +732,7 @@ export class World {
         // 詰めた後に視野別の採食を集計するので、これも一緒に動かさないと
         // 「誰がどれだけ食べたか」の対応がずれる
         aGrazed[i] = aGrazed[n];
+        aMoveKind[i] = aMoveKind[n];
         aAlive[i] = aAlive[n];
         aInfected[i] = aInfected[n];
       }

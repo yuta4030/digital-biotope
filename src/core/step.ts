@@ -451,6 +451,8 @@ function toward(d: number, speed: number): number {
  * 追跡がランダムウォークより当たらなくなる。
  */
 function moveAgents(w: World): void {
+  w.moveKindSteps.fill(0);
+
   if (!w.anyVision) {
     for (let i = 0; i < w.count; i++) moveOne(w, i);
     return;
@@ -502,7 +504,13 @@ function moveOne(w: World, i: number): void {
   const si = w.aSpecies[i];
   const def = w.defs[si];
   const speed = quantize(w, w.aSpeed[i]);
-  if (speed === 0) return;
+  // 速度0の個体はここで抜ける。**視野の quantize より前**に抜けること——
+  // 後ろに回すと動かない個体まで乱数を引き、既存の構成の結果が変わる
+  if (speed === 0) {
+    w.aMoveKind[i] = 3;
+    w.moveKindSteps[si * 4 + 3]++;
+    return;
+  }
 
   const x = w.aX[i];
   const y = w.aY[i];
@@ -512,6 +520,12 @@ function moveOne(w: World, i: number): void {
   let dy = 0;
 
   const dir = r > 0 ? decideDirection(w, i, si, x, y, r) : 0;
+
+  // 歩の種類を残す。採食のときに読んで「盲目の歩が何を取ったか」を分ける。
+  // r>0 でも行き先が無ければ乱数で動くので、0（盲目）と 1（見たが無い）は別に数える
+  const kind = r === 0 ? 0 : dir === 0 ? 1 : 2;
+  w.aMoveKind[i] = kind;
+  w.moveKindSteps[si * 4 + kind]++;
 
   if (dir === 0) {
     dx = w.rng.intRange(-speed, speed);
@@ -538,6 +552,8 @@ function feed(w: World): void {
   w.grazeAmountA.fill(0);
   w.grazeAmountB.fill(0);
   w.grazeCount.fill(0);
+  w.grazeKindAmount.fill(0);
+  w.grazeKindCount.fill(0);
   w.visionSumEaten.fill(0);
   w.visionSumOther.fill(0);
 
@@ -602,6 +618,8 @@ function feed(w: World): void {
         w.grazeAmountA[si] += eatenA;
         w.grazeAmountB[si] += eatenB;
         w.grazeCount[si]++;
+        w.grazeKindAmount[si * 4 + w.aMoveKind[i]] += eaten;
+        w.grazeKindCount[si * 4 + w.aMoveKind[i]]++;
         w.aGrazed[i] = eaten;
       }
     } else if (!ate && def.eatsGrass) {
@@ -617,6 +635,10 @@ function feed(w: World): void {
         // ——個体は自分のセルを食べ切るので、step 後に見ると必ず0になる
         w.grazeAmount[si] += eaten;
         w.grazeCount[si]++;
+        // 歩の種類別にも分ける。1%の盲目の歩が何を取っているかは、
+        // 種別の合計では有視界の歩に埋もれて見えない（27 節2 の段差）
+        w.grazeKindAmount[si * 4 + w.aMoveKind[i]] += eaten;
+        w.grazeKindCount[si * 4 + w.aMoveKind[i]]++;
         // 同じ量を個体別にも残す。視野が同じ種の中で違う構成では、
         // 種別の合計だけでは「誰が濃いセルを取っているか」が見えない
         w.aGrazed[i] = eaten;
