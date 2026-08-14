@@ -124,25 +124,149 @@ button.primary {
 
 .panel {
   flex: 1;
-  min-width: 340px;
+  /* flex の子は既定で min-width:auto なので、中身が広いとページごと横に伸びる。
+     表は自分の枠内でスクロールさせたいので、ここで縮めるのを許す */
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.scroll {
+  overflow-x: auto;
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  padding: 8px 10px 4px;
+}
+
+.card h2 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.card .opt {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--dim);
+  font-weight: 400;
+}
+
+.tab {
+  padding: 2px 9px;
+  font-size: 11px;
+  border-radius: 3px;
+  color: var(--dim);
+}
+
+.tab.on {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 #graph {
   display: block;
   width: 100%;
   height: 260px;
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  background: var(--panel);
 }
 
-/* 幅があれば設定群を横に並べる。種を増やしても縦に伸び続けない */
+#hist {
+  display: block;
+  width: 100%;
+  height: 150px;
+}
+
+/* 計器。数字を並べるので等幅の数字にしないと桁が揃わず読めない。
+   keep-all は日本語の見出しが1文字ずつ割れるのを止めるため
+   （「個体数」が「個体」「数」になっていた） */
+table.inst {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  word-break: keep-all;
+}
+
+/* 折り返してほしくない対（死因と数字、採食の頻度と量） */
+.nb {
+  white-space: nowrap;
+}
+
+table.inst th {
+  text-align: left;
+  font-weight: 400;
+  color: var(--dim);
+  border-bottom: 1px solid var(--line);
+  padding: 2px 8px 4px 0;
+}
+
+/* 既定は折り返す。列が多い構成（感染症は7列）では、nowrap にすると
+   表が枠を越えて右端の列が初期位置で切れる——スクロールできることに
+   気づけないので、実質「出していない」のと同じになる */
+table.inst td {
+  padding: 3px 8px 3px 0;
+  vertical-align: baseline;
+}
+
+/* 桁が揃っていないと読めない列だけ折り返さない */
+table.inst td.num {
+  white-space: nowrap;
+}
+
+table.inst td:first-child {
+  min-width: 6.5em;
+}
+
+table.inst tbody tr + tr td {
+  border-top: 1px solid #1d232a;
+}
+
+.sw {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 6px;
+}
+
+.win {
+  margin-left: auto;
+  color: var(--dim);
+  font-weight: 400;
+}
+
+#instruments h2 {
+  display: flex;
+}
+
+.row.choice {
+  grid-template-columns: 1fr 164px;
+}
+
+.row select {
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  width: 100%;
+}
+
+/* 幅があれば設定群を横に並べる。種を増やしても縦に伸び続けない。
+   min() を挟んであるのは、パネルが300pxを切ったときにトラックが縮めず
+   ページごと横スクロールが出るため（1280px 幅で踏んだ） */
 #controls {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
   align-items: start;
   gap: 8px;
 }
@@ -202,4 +326,8 @@ button.primary {
 
 input[type='range'] {
   accent-color: var(--accent);
+}
+
+.dim {
+  color: var(--dim);
 }

@@ -30,6 +30,15 @@ export function buildControls(container: HTMLElement, config: WorldConfig): void
     undefined,
     (v) => String(PATCH_SCALES[v]));
 
+  // 資源が2本の構成でだけ供給比を出す。**ここで初めて split を生やしてはいけない**
+  // ——生やした瞬間に草の初期化が2本ぶんに変わり、既存の構成の結果が動く。
+  // 資源を2本にするのは presets の仕事（types.ts の ResourceSplitConfig 参照）
+  const split = config.grass.split;
+  if (split !== undefined) {
+    slider(env, '資源Aの供給比', 0, 1, 0.05, 2,
+      () => split.supplyA, (v) => (split.supplyA = v));
+  }
+
   // 地形は「移動の代償」の分布を変える。パッチ（資源の分布）とは別の軸なので
   // 同じ大きさの選択肢を共有しつつ、場そのものは別の乱数列から作られる。
   // 強さ0（既定）なら全セルの倍率が1で、掛け算そのものを省く
@@ -41,6 +50,13 @@ export function buildControls(container: HTMLElement, config: WorldConfig): void
     (v) => (terrain.scale = PATCH_SCALES[v]),
     undefined,
     (v) => String(PATCH_SCALES[v]));
+  // 20 の対照。同じ場・同じ生成器のまま「形質との結合だけ」を外す。
+  // base 側では速度の限界代償が speedCost で一定になるので、
+  // ここで差が消えれば効いていたのは不均質さではなく形質の差異化のほう
+  choice(env, '地形が掛かる項', [
+    { value: 'speed', label: '移動コスト' },
+    { value: 'base', label: '基礎代謝（対照）' },
+  ], () => terrain.target, (v) => (terrain.target = v as 'speed' | 'base'));
 
   // 無作為な大量死。割合0（既定）なら何も起きず、乱数も消費しない。
   // 間隔と割合は別々に動かせるが、比べるときは割合÷間隔を揃えること
@@ -53,6 +69,13 @@ export function buildControls(container: HTMLElement, config: WorldConfig): void
     (v) => (dist.interval = DISTURB_INTERVALS[v]),
     undefined,
     (v) => String(DISTURB_INTERVALS[v]));
+
+  // 死骸の在庫を毎ステップどれだけ草に戻すか。1（既定）なら在庫を素通りする＝
+  // 08 と同じ挙動。下げると流入が時間方向に均される。
+  // 還元を書いていない構成では読まれもしないので、置いても何も起きない
+  config.grass.detritusRelease ??= 1;
+  slider(env, '死骸の放出率', 0.02, 1, 0.02, 2,
+    () => config.grass.detritusRelease!, (v) => (config.grass.detritusRelease = v));
 
   container.appendChild(env);
 
@@ -101,11 +124,23 @@ export function buildControls(container: HTMLElement, config: WorldConfig): void
     // 速度が遺伝する種では、この値は初期個体に配るぶんにしか効かない
     slider(g, def.mutation ? '移動速度 *' : '移動速度', 0, 4, def.mutation ? 0.1 : 1, def.mutation ? 1 : 0,
       () => def.speed, (v) => (def.speed = v), refresh);
-    // 視野が遺伝する種では、この値は初期個体に配るぶんにしか効かない（速度と同じ）
-    slider(g, def.visionMutation ? '視野 *' : '視野', 0, 8, def.visionMutation ? 0.5 : 1,
-      def.visionMutation ? 1 : 0,
+    // 視野が遺伝する種では、この値は初期個体に配るぶんにしか効かない（速度と同じ）。
+    // 刻みを 0.05 にしてあるのは 26・27 の窓の端（低い側 0.55〜0.60、
+    // 高い側 0.95〜1.00）をスライダーの上で踏めるようにするため
+    slider(g, def.visionMutation ? '視野 *' : '視野', 0, 8, def.visionMutation ? 0.05 : 1,
+      def.visionMutation ? 2 : 0,
       () => def.visionRange, (v) => (def.visionRange = v), refresh);
-    slider(g, '死骸の還元', 0, 100, 1, 0,
+    if (def.resourceA !== undefined) {
+      // 名目の配分。**実際に何を取ったかは計器の「摂取 A:B」で見ること。**
+      // 23 では p=0.90 の名目上の専門型が摂取 A50% で、事実上の汎用型だった
+      slider(g, '資源Aへの配分', 0, 1, 0.05, 2,
+        () => def.resourceA!, (v) => (def.resourceA = v));
+    }
+
+    // 死骸まわりは `*`。World.anyCorpse は構築時に決まるので、走行中に0から
+    // 上げても在庫が放出されない（死骸が積まれるだけで草に戻らない）。
+    // リセットすれば効く
+    slider(g, '死骸の還元 *', 0, 100, 1, 0,
       () => def.corpseGrass, (v) => (def.corpseGrass = v));
     // 1セルに固まって落ちると、そこだけ採食量の何倍もの山になる。
     // それが安定性を大きく変える（docs/reports/09）
@@ -121,6 +156,34 @@ export function buildControls(container: HTMLElement, config: WorldConfig): void
       const m = def.visionMutation;
       slider(g, '変異の強さ（視野）', 0, 0.2, 0.005, 3,
         () => m.sigma, (v) => (m.sigma = v));
+    }
+
+    // 感染症と密度依存の死は、**プリセットが書いている種にだけ**出す。
+    // ここで生やすと anyInfection / anyCrowding が立ち、走査そのものが増える。
+    // 機構を足すのは presets の仕事という約束（CLAUDE.md）に合わせてある
+    if (def.infection) {
+      const inf = def.infection;
+      slider(g, '伝染確率', 0, 1, 0.05, 2,
+        () => inf.transmit, (v) => (inf.transmit = v));
+      slider(g, '致死性', 0, 0.1, 0.005, 3,
+        () => inf.lethality, (v) => (inf.lethality = v));
+      slider(g, '回復率', 0, 0.1, 0.005, 3,
+        () => inf.recover, (v) => (inf.recover = v));
+      // 17 の対照。機構もつまみも同一で、宿主特異性だけが無い。
+      // **対照のほうが多く殺しているのに共存しない**のが筋6の要点
+      choice(g, '伝染範囲', [
+        { value: 'self', label: '同種のみ' },
+        { value: 'all', label: '全種（対照）' },
+      ], () => inf.scope, (v) => (inf.scope = v as 'self' | 'all'));
+    }
+    if (def.crowding) {
+      const cr = def.crowding;
+      slider(g, '密度依存の死', 0, 0.5, 0.01, 2,
+        () => cr.rate, (v) => (cr.rate = v));
+      choice(g, '見る密度', [
+        { value: 'self', label: '自種' },
+        { value: 'all', label: '全種（対照）' },
+      ], () => cr.scope, (v) => (cr.scope = v as 'self' | 'all'));
     }
 
     // 視野0の種では効かないが、視野は実行中に上げられるので常に出しておく
@@ -139,6 +202,39 @@ export function buildControls(container: HTMLElement, config: WorldConfig): void
   note.style.color = 'var(--dim)';
   note.textContent = '* が付いた項目はリセット時に反映されます。その他は即時反映。';
   container.appendChild(note);
+}
+
+/**
+ * 選択肢。**対照を切り替えるためにある。**
+ *
+ * 16・17・20 はどれも「機構もつまみも同一で、性質を1つだけ外した対照」を持っていて、
+ * それが効いたかどうかの判定そのものだった。数値のスライダーでは表せない。
+ */
+function choice(
+  parent: HTMLElement,
+  label: string,
+  options: { value: string; label: string }[],
+  get: () => string,
+  set: (v: string) => void,
+): void {
+  const row = document.createElement('div');
+  row.className = 'row choice';
+
+  const name = document.createElement('span');
+  name.textContent = label;
+
+  const select = document.createElement('select');
+  for (const o of options) {
+    const opt = document.createElement('option');
+    opt.value = o.value;
+    opt.textContent = o.label;
+    select.appendChild(opt);
+  }
+  select.value = get();
+  select.addEventListener('change', () => set(select.value));
+
+  row.append(name, select);
+  parent.appendChild(row);
 }
 
 function group(title: string, color?: string): HTMLElement {

@@ -30,12 +30,39 @@
             シード
             <input id="seed" type="number" value="12345" />
           </label>
+          <label class="layer">
+            盤面
+            <select id="layer">
+              <option value="life">生物と草</option>
+              <option value="grass">草だけ</option>
+              <option value="terrain">地形（移動コスト）</option>
+              <option value="patch">パッチ（草の回復）</option>
+              <option value="detritus">死骸の在庫</option>
+            </select>
+          </label>
         </div>
         <p id="presetDesc" class="desc"></p>
       </section>
 
       <aside class="panel">
-        <canvas id="graph"></canvas>
+        <div class="card">
+          <h2>
+            個体数
+            <label class="opt"><input id="logScale" type="checkbox" /> 対数軸</label>
+          </h2>
+          <canvas id="graph"></canvas>
+        </div>
+
+        <!-- 形質が遺伝する構成でだけ出す。平均では二山かどうかが原理的に見えない -->
+        <div class="card" id="histCard" hidden>
+          <h2>
+            形質の分布
+            <span class="opt" id="traitTabs"></span>
+          </h2>
+          <canvas id="hist"></canvas>
+        </div>
+
+        <div class="group" id="instruments"></div>
         <div id="controls"></div>
       </aside>
     </main>

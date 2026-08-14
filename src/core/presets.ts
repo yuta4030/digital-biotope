@@ -493,6 +493,81 @@ presets.push({
     ),
 });
 
+presets.push({
+  key: 'coexist',
+  label: '共存（捕食者なし）',
+  description:
+    '「燃費」構成から肉食を抜いただけ。21 が「これは本物の共存だ」と確かめた構成で、' +
+    '30000ステップ・8シードで 478 対 1055 に収束し、相互侵入がどちらの向きにも通る。' +
+    '軸は視野の有無で、無警戒型は94%の歩で 0.423 ずつ、警戒型は46%の歩で 1.032 ずつ食べる' +
+    '——同じ草の違う統計量に制限されている。計器の「採食」欄でその内訳が見える。',
+  build: () => {
+    const cfg = presetByKey('upkeep').build();
+    // 17 と同じく配列ごと外す。0体で残すと絶滅として数えられて、
+    // 02 の検証スクリプトが「崩壊した」と読む。
+    // **0体で残す場合と結果はビット単位で一致する**——個体が1体もいない種は
+    // 乱数を1つも引かず、捕食者を探す走査も空振りするだけなので
+    // （26・27 のスクリプトは 0体で残す書き方だが、動くものは同じ）
+    cfg.species = cfg.species.filter((s) => s.id !== 3);
+    return cfg;
+  },
+});
+
+presets.push({
+  key: 'window',
+  label: '共存の窓（視野を手で置く）',
+  description:
+    '上の共存構成で、草食2種の視野を軸の上の好きな2点に置けるようにしたもの（26・27）。' +
+    '既定は 警戒型3.00 / 無警戒型0.25 で、30000ステップ・8シードで 267 対 1284 に落ち着く' +
+    '（相互侵入もどちらの向きにも通る）。' +
+    '無警戒型の視野を 0.60 まで上げると共存は消え、警戒型を 0.95 まで下げても消える。' +
+    '窓は「低い側 ≦ 0.55〜0.60 かつ 高い側 ≧ 0.95〜1.00」。' +
+    '1種だけを進化させた着地点 0.80 はその窓の外にあり、両端とも内側へ動く。',
+  build: () => {
+    const cfg = presetByKey('upkeep').build();
+    cfg.species = cfg.species.filter((s) => s.id !== 3); // 上と同じ理由
+    // 端数の視野を使うには visionMutation が要る。無いと定義値がそのまま
+    // 走査半径の添字に入るので、非整数だと壊れる。σ=0 なので値は動かないが、
+    // 子1体につき正規乱数を1つ引く——**両種で同じ**なので比較は公平（26 と同じ扱い）
+    for (const herb of [cfg.species[0], cfg.species[1]]) {
+      herb.visionMutation = { sigma: 0, min: 0, max: 5 };
+    }
+    cfg.species[0].visionRange = 3.0; // 警戒型（高い側）
+    cfg.species[1].visionRange = 0.25; // 無警戒型（低い側）
+    return cfg;
+  },
+});
+
+presets.push({
+  key: 'infection',
+  label: '感染症（負の頻度依存）',
+  description:
+    '競合構成から肉食を抜き、代わりに接触で伝わる病気を入れたもの（17）。' +
+    '見ているのは「同じセルに感染個体が何体いるか」だけで、種の個体数はコードに出てこない。' +
+    'それでも多いほうだけが病気を抱え込むので共存する（A 701 / B 345）。' +
+    '伝染範囲を「全種」にすると同じ機構・同じつまみのまま共存が消える' +
+    '——しかもそちらのほうが多く殺している。効いているのは死の量ではなく死の向き。',
+  build: () => {
+    const cfg = presetByKey('keystone').build();
+    // 15・16・17 と同じ扱い。捕食者は配列ごと外す（0体で残すと絶滅として数えられる）
+    cfg.species = cfg.species.filter((s) => s.id !== 3);
+    for (const s of cfg.species) {
+      // 致死性0.02は内点の山。弱いと蔓延しても打撃が足りず、強いと宿主を
+      // 殺すのが早すぎて病原体が維持できない（17 節3）
+      s.infection = {
+        transmit: 0.8,
+        lethality: 0.02,
+        recover: 0,
+        // 病原体が絶えた種への再着火用。密度に依存しない死なので最小限にする
+        spontaneous: 0.0002,
+        initial: 0.05,
+        scope: 'self',
+      };
+    }
+    return cfg;
+  },
+});
+
 export function presetByKey(key: string): Preset {
   const p = presets.find((x) => x.key === key);
   if (!p) throw new Error(`不明なプリセット: ${key}`);
