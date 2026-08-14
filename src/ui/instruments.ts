@@ -186,14 +186,17 @@ export class Instruments {
       const graze =
         !def.eatsGrass || popSum === 0
           ? '—'
-          : `${pct(gCnt / popSum)}% の歩 × ${(gCnt > 0 ? gAmt / gCnt : 0).toFixed(3)}`;
+          : `<span class="nb">${pct(gCnt / popSum)}% の歩</span> ` +
+            `<span class="nb">× ${(gCnt > 0 ? gAmt / gCnt : 0).toFixed(3)}</span>`;
 
       // 死因は必ず分けて出す。同じ「%/歩」でも、被食・餓死・大量死・密度依存・感染は
       // 形質を見るものと見ないものが混ざっている。正味だけ見ると
       // 逆を向いた選択差が打ち消し合って「何も効いていない」に見える
+      // 死因と数字の対は割らない。折り返しを許した副作用で
+      // 「感染 0.96」が「感」「染 0.96」に割れると、読めるものが読めなくなる
       const parts: string[] = [];
       const put = (label: string, v: number) => {
-        if (v > 0) parts.push(`${label} ${pct(v / popSum)}`);
+        if (v > 0) parts.push(`<span class="nb">${label} ${pct(v / popSum)}</span>`);
       };
       if (popSum > 0) {
         put('被食', this.sum(s, S_D_EATEN));

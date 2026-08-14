@@ -185,11 +185,19 @@ button.primary {
   height: 150px;
 }
 
-/* 計器。数字を並べるので等幅の数字にしないと桁が揃わず読めない */
+/* 計器。数字を並べるので等幅の数字にしないと桁が揃わず読めない。
+   keep-all は日本語の見出しが1文字ずつ割れるのを止めるため
+   （「個体数」が「個体」「数」になっていた） */
 table.inst {
   width: 100%;
   border-collapse: collapse;
   font-variant-numeric: tabular-nums;
+  word-break: keep-all;
+}
+
+/* 折り返してほしくない対（死因と数字、採食の頻度と量） */
+.nb {
+  white-space: nowrap;
 }
 
 table.inst th {
