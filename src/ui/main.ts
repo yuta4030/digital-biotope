@@ -1,7 +1,9 @@
 import { World } from '../core/world.ts';
 import { step } from '../core/step.ts';
 import { presets, presetByKey } from '../core/presets.ts';
-import { GridRenderer, GraphRenderer } from './render.ts';
+import { GridRenderer, GraphRenderer, type GridLayer } from './render.ts';
+import { HistogramRenderer, type TraitKind } from './histogram.ts';
+import { Instruments } from './instruments.ts';
 import { buildControls } from './controls.ts';
 import type { WorldConfig } from '../core/types.ts';
 
@@ -9,6 +11,10 @@ const CELL_SCALE = 6;
 
 const gridCanvas = document.querySelector<HTMLCanvasElement>('#grid')!;
 const graphCanvas = document.querySelector<HTMLCanvasElement>('#graph')!;
+const histCanvas = document.querySelector<HTMLCanvasElement>('#hist')!;
+const histCard = document.querySelector<HTMLDivElement>('#histCard')!;
+const traitTabs = document.querySelector<HTMLSpanElement>('#traitTabs')!;
+const instrumentsEl = document.querySelector<HTMLDivElement>('#instruments')!;
 const readout = document.querySelector<HTMLDivElement>('#readout')!;
 const controlsEl = document.querySelector<HTMLElement>('#controls')!;
 const descEl = document.querySelector<HTMLParagraphElement>('#presetDesc')!;
@@ -19,14 +25,22 @@ const speedInput = document.querySelector<HTMLInputElement>('#speed')!;
 const speedLabel = document.querySelector<HTMLSpanElement>('#speedLabel')!;
 const seedInput = document.querySelector<HTMLInputElement>('#seed')!;
 const presetSelect = document.querySelector<HTMLSelectElement>('#preset')!;
+const layerSelect = document.querySelector<HTMLSelectElement>('#layer')!;
+const logScaleInput = document.querySelector<HTMLInputElement>('#logScale')!;
 
 let config: WorldConfig = presets[0].build();
 let world = new World(config);
 let grid = new GridRenderer(gridCanvas, world, CELL_SCALE);
 const graph = new GraphRenderer(graphCanvas, world);
+const hist = new HistogramRenderer(histCanvas, world);
+const instruments = new Instruments(world);
 
 let running = true;
 let stepsPerFrame = 1;
+let trait: TraitKind = 'vision';
+
+/** 種別の個体数。1ステップに1回だけ数えて、グラフ・計器・読み出しで使い回す */
+let counts = new Int32Array(world.defs.length);
 
 // --- プリセット ---
 for (const p of presets) {
@@ -45,12 +59,49 @@ function loadPreset(key: string): void {
   config = preset.build();
   config.seed = Number(seedInput.value) || 0;
 
-  world = new World(config);
-  grid = new GridRenderer(gridCanvas, world, CELL_SCALE);
-  graph.reset(world);
-
+  rebuildWorld();
   buildControls(controlsEl, config);
   descEl.textContent = preset.description;
+}
+
+/** 種の構成が変わりうる経路はここに集約する。作り直し漏れがあると系列が食い違う */
+function rebuildWorld(): void {
+  world = new World(config);
+  counts = new Int32Array(world.defs.length);
+  grid = new GridRenderer(gridCanvas, world, CELL_SCALE);
+  grid.layer = layerSelect.value as GridLayer;
+  graph.reset(world);
+  hist.reset(world);
+  instruments.reset(world);
+  syncTraitTabs();
+}
+
+/**
+ * 形質のタブ。速度と視野のどちらが遺伝するかは構成によるので、
+ * 遺伝しているものだけ出す。どちらも遺伝しない構成では枠ごと隠す
+ */
+function syncTraitTabs(): void {
+  const kinds: TraitKind[] = [];
+  if (hist.available('speed')) kinds.push('speed');
+  if (hist.available('vision')) kinds.push('vision');
+
+  histCard.hidden = kinds.length === 0;
+  traitTabs.innerHTML = '';
+  if (kinds.length === 0) return;
+  if (!kinds.includes(trait)) trait = kinds[0];
+
+  for (const k of kinds) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = k === 'speed' ? '速度' : '視野';
+    b.className = k === trait ? 'tab on' : 'tab';
+    b.addEventListener('click', () => {
+      trait = k;
+      syncTraitTabs();
+    });
+    traitTabs.appendChild(b);
+  }
+  hist.resize();
 }
 
 // --- 操作 ---
@@ -62,8 +113,7 @@ playPause.addEventListener('click', () => {
 /** スライダーで変えたパラメータは保ったまま、初期配置からやり直す */
 resetBtn.addEventListener('click', () => {
   config.seed = Number(seedInput.value) || 0;
-  world = new World(config);
-  graph.reset(world);
+  rebuildWorld();
 });
 
 speedInput.addEventListener('input', () => {
@@ -73,7 +123,18 @@ speedInput.addEventListener('input', () => {
 
 seedInput.addEventListener('change', () => resetBtn.click());
 
-window.addEventListener('resize', () => graph.resize());
+layerSelect.addEventListener('change', () => {
+  grid.layer = layerSelect.value as GridLayer;
+});
+
+logScaleInput.addEventListener('change', () => {
+  graph.logScale = logScaleInput.checked;
+});
+
+window.addEventListener('resize', () => {
+  graph.resize();
+  hist.resize();
+});
 
 // スペースキーで再生/停止
 window.addEventListener('keydown', (e) => {
@@ -100,12 +161,20 @@ function frame(): void {
     const g = totalGrass();
     for (let i = 0; i < stepsPerFrame; i++) {
       step(world);
-      graph.sample(world, g);
+      // 計器は毎ステップ上書きされるので、1歩でも飛ばすとその歩は失われる。
+      // 早送りでも取りこぼさないよう、内側のループの中で取り込む
+      world.countBySpecies(counts);
+      graph.sample(counts, g);
+      instruments.sample(world, counts);
     }
+  } else {
+    world.countBySpecies(counts);
   }
 
   grid.draw(world);
   graph.draw();
+  if (!histCard.hidden) hist.draw(trait);
+  instruments.render(instrumentsEl, counts);
 
   framesSince++;
   const now = performance.now();
@@ -119,21 +188,16 @@ function frame(): void {
   requestAnimationFrame(frame);
 }
 
-const readoutCounts = () => {
-  const counts = new Int32Array(world.defs.length);
-  world.countBySpecies(counts);
-  return counts;
-};
-
 // 形質が遺伝する構成では個体数だけ見ても何が起きているか分からないので、
-// 集団の平均を読み出しに出す。種は32までなのでこの長さで足りる
+// 集団の平均を読み出しに出す。種は32までなのでこの長さで足りる。
+// **ただし平均は分布の代表になっていない**ことがある——二山かどうかは
+// 「形質の分布」のヒストグラムで見ること（20 でこれに気づけなかった）
 const speedMean = new Float64Array(32);
 const speedSd = new Float64Array(32);
 const visionMean = new Float64Array(32);
 const visionSd = new Float64Array(32);
 
 function updateReadout(): void {
-  const counts = readoutCounts();
   if (world.anyMutation) world.speedStats(speedMean, speedSd);
   if (world.anyVisionMutation) world.visionStats(visionMean, visionSd);
 
@@ -158,4 +222,5 @@ function updateReadout(): void {
 
 buildControls(controlsEl, config);
 descEl.textContent = presets[0].description;
+syncTraitTabs();
 requestAnimationFrame(frame);
