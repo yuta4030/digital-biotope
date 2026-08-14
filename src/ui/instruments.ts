@@ -166,7 +166,9 @@ export class Instruments {
     const hasInfection = w.anyInfection;
     const hasTwo = w.twoResources;
 
-    const head = ['種', '個体数', `窓内 最小–最大`, '採食', '死亡 %/歩'];
+    // 見出しは短く。長い説明は下の注に回す——列が7本になる構成があるので、
+    // 見出しの幅がそのまま表の幅になる
+    const head = ['種', '個体数', '窓内', '採食', '死亡 %/歩'];
     if (hasTwo) head.push('摂取 A:B');
     if (hasInfection) head.push('感染');
 
@@ -201,12 +203,13 @@ export class Instruments {
         put('感染', this.sum(s, S_D_INFECT));
       }
 
-      const cells = [
-        `<span class="sw" style="background:${def.color}"></span>${def.name}`,
-        `<b>${counts[s]}</b>`,
-        min === max ? String(min) : `${min} – ${max}`,
-        graze,
-        parts.length > 0 ? parts.join('　') : '—',
+      // 折り返さない列（桁が揃っていないと読めないもの）だけ num を付ける
+      const cells: { html: string; num?: boolean }[] = [
+        { html: `<span class="sw" style="background:${def.color}"></span>${def.name}` },
+        { html: `<b>${counts[s]}</b>`, num: true },
+        { html: min === max ? String(min) : `${min} – ${max}`, num: true },
+        { html: graze },
+        { html: parts.length > 0 ? parts.join('　') : '—' },
       ];
 
       if (hasTwo) {
@@ -215,7 +218,10 @@ export class Instruments {
         // 名目の配分ではなく**実際に取った内訳**。23 で「p=0.90 の名目上の
         // 専門型が摂取 A50%＝事実上の汎用型だった」を踏んだので、
         // 設定値ではなく実測を出す
-        cells.push(a + b > 0 ? `${Math.round((a / (a + b)) * 100)} : ${Math.round((b / (a + b)) * 100)}` : '—');
+        cells.push({
+          html: a + b > 0 ? `${Math.round((a / (a + b)) * 100)} : ${Math.round((b / (a + b)) * 100)}` : '—',
+          num: true,
+        });
       }
       if (hasInfection) {
         const infRate = popSum > 0 ? this.sum(s, S_INFECTED) / popSum : 0;
@@ -224,10 +230,12 @@ export class Instruments {
         // 接触と自然発生の内訳。自然発生が主なら密度に依存しない死で、
         // 15 で潰した「均等な死」をやっているだけになる
         const route = con + spo > 0 ? `（接触 ${Math.round((con / (con + spo)) * 100)}%）` : '';
-        cells.push(def.infection === undefined ? '—' : `${Math.round(infRate * 100)}%${route}`);
+        cells.push({ html: def.infection === undefined ? '—' : `${Math.round(infRate * 100)}%${route}` });
       }
 
-      rows.push(`<tr>${cells.map((c) => `<td>${c}</td>`).join('')}</tr>`);
+      rows.push(
+        `<tr>${cells.map((c) => `<td${c.num ? ' class="num"' : ''}>${c.html}</td>`).join('')}</tr>`,
+      );
     }
 
     // --- 世界ぜんたい ---
@@ -262,6 +270,13 @@ export class Instruments {
     if (w.anyCorpse) {
       notes.push(`死骸の在庫 ${w.totalDetritus().toFixed(0)}`);
     }
+    // 見出しを短くしたぶんの説明。単位はレポートと同じなので、
+    // ここを読めば表の数字をそのまま報告の数字と突き合わせられる
+    notes.push(
+      `<span class="dim">窓内＝直近${steps}歩の個体数の最小–最大（谷）　` +
+        `採食＝採食に成功した歩の割合 × 1回あたりの量　` +
+        `死亡＝1個体が1歩に受ける確率（%/歩）</span>`,
+    );
 
     el.innerHTML =
       `<h2>計器<span class="win">直近 ${steps} 歩</span></h2>` +
